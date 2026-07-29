@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aisentinel-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aisentinel
+      POSTGRES_USER: aisentinel
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    secrets:
+      - pg_password
+
+secrets:
+  pg_password:
+    file: ./pg_password.txt
+
+volumes:
+  pgdata:

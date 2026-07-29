@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "Browser AI Sentinel",
+  "version": "0.1.0",
+  "description": "Detects indirect prompt injection targeting AI browser agents and gates outbound file/PII uploads to AI services. Phase 1 (single-endpoint MVP).",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmZBPjHySkKwc8Jc/WiUPtmlQv/iDOgR65YCB/gjvmzcIWu/3h1GcFbqbQOiL2BZD5hdKGtc0g9n9oKgdivV7CaC6+quZcYztdJ9GcAOel92MwL6q9LGowmJ0bikf+DE+WrPE17bOFk/Wug3VPpU05fb2wa7j9Pf1TkzioS8eRwvdJMin34sSJKB8pHHHXrqf0YfA2hBIdVxAaPf8zxhtGvyA3e2VqTQQFPYgsieQlDVfy2tMg82ucyqmrzkFVibXvKRHHFU/C8vuygGbZyCskU0gyrJa034qKx0vgrQmksrAhJp3tZQMTeBINydGH2/35OD9hBEEjPnHX8BawTWnzwIDAQAB",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": ["nativeMessaging", "notifications", "scripting"],
+  "host_permissions": ["http://127.0.0.1:8090/*"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-isolated/injection-scan.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://claude.ai/*",
+        "*://chatgpt.com/*",
+        "*://chat.openai.com/*",
+        "*://gemini.google.com/*",
+        "*://www.perplexity.ai/*",
+        "*://perplexity.ai/*",
+        "*://copilot.microsoft.com/*"
+      ],
+      "js": ["content-isolated/relay.js", "content-isolated/platform-adapters/index.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://claude.ai/*",
+        "*://chatgpt.com/*",
+        "*://chat.openai.com/*",
+        "*://gemini.google.com/*",
+        "*://www.perplexity.ai/*",
+        "*://perplexity.ai/*",
+        "*://copilot.microsoft.com/*"
+      ],
+      "js": ["content-main/fetch-patch.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    }
+  ]
+}

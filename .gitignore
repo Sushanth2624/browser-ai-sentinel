@@ -1,0 +1,31 @@
+# Go
+agent/bin/
+agent/**/*.exe
+
+# Python
+ai-engine/.venv/
+ai-engine/__pycache__/
+ai-engine/**/__pycache__/
+ai-engine/*.egg-info/
+
+# Node / extension / dashboard
+node_modules/
+extension/dist/
+extension/*.pem
+dashboard/dist/
+dashboard/.vite/
+
+# secrets / env
+*.env
+secrets.env
+.env.local
+db/pg_password.txt
+
+# data
+db/pgdata/
+data/
+
+# OS / editor
+.DS_Store
+*.log
+extension/extension_key_pub.b64
