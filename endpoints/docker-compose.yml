@@ -1,0 +1,60 @@
+services:
+  endpoint-priya:
+    build:
+      context: ..
+      dockerfile: endpoints/Dockerfile
+    hostname: bas-endpoint-1
+    network_mode: host
+    environment:
+      OS_USERNAME: priya.sharma
+      DAEMON_PORT: "8091"
+      ENDPOINT_NAME: priya.sharma
+      BEHAVIOR_PROFILE: normal
+    volumes:
+      - ../eval/dataset:/opt/browser-ai-sentinel/eval-dataset:ro
+    restart: unless-stopped
+
+  endpoint-arjun:
+    build:
+      context: ..
+      dockerfile: endpoints/Dockerfile
+    hostname: bas-endpoint-2
+    network_mode: host
+    environment:
+      OS_USERNAME: arjun.mehta
+      DAEMON_PORT: "8092"
+      ENDPOINT_NAME: arjun.mehta
+      BEHAVIOR_PROFILE: normal
+    volumes:
+      - ../eval/dataset:/opt/browser-ai-sentinel/eval-dataset:ro
+    restart: unless-stopped
+
+  endpoint-karan:
+    build:
+      context: ..
+      dockerfile: endpoints/Dockerfile
+    hostname: bas-endpoint-3
+    network_mode: host
+    environment:
+      OS_USERNAME: karan.iyer
+      DAEMON_PORT: "8093"
+      ENDPOINT_NAME: karan.iyer
+      BEHAVIOR_PROFILE: shadow_ai
+    volumes:
+      - ../eval/dataset:/opt/browser-ai-sentinel/eval-dataset:ro
+    restart: unless-stopped
+
+  endpoint-divya:
+    build:
+      context: ..
+      dockerfile: endpoints/Dockerfile
+    hostname: bas-endpoint-4
+    network_mode: host
+    environment:
+      OS_USERNAME: divya.rao
+      DAEMON_PORT: "8094"
+      ENDPOINT_NAME: divya.rao
+      BEHAVIOR_PROFILE: risky
+    volumes:
+      - ../eval/dataset:/opt/browser-ai-sentinel/eval-dataset:ro
+    restart: unless-stopped

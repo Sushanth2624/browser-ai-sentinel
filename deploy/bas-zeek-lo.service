@@ -1,0 +1,21 @@
+[Unit]
+Description=Browser AI Sentinel - Zeek sensor (JA3/JA4 fingerprinting on lo)
+Documentation=https://github.com/Sushanth2624/browser-ai-sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /home/analysis/browser-ai-sentinel/sensor/logs/zeek-lo
+WorkingDirectory=/home/analysis/browser-ai-sentinel/sensor/logs/zeek-lo
+# Separate process from bas-zeek (ens18) because Zeek only accepts a single -i per process.
+# Watches loopback specifically for Phase 3's mock-ai endpoints (sensor/mock-ai) — same-host
+# traffic to a local address never transits the physical NIC, confirmed empirically (see
+# sensor/suricata/suricata.yaml's comment for the same finding on the Suricata side).
+ExecStart=/opt/zeek/bin/zeek -C -i lo /home/analysis/browser-ai-sentinel/sensor/zeek/bas.zeek
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

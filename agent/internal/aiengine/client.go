@@ -37,6 +37,27 @@ func (c *Client) ScoreInjection(url string, indicators map[string]int) (*Injecti
 	return &result, nil
 }
 
+// InjectionBaselinesResult is ai-engine's /score/injection/baselines response: the same
+// multi-indicator (C) score as ScoreInjection, plus the two single-indicator baselines (A, B)
+// used for Phase 3's A/B/C evaluation — see ai-engine/injection_scoring/scorer.py.
+type InjectionBaselinesResult struct {
+	C               InjectionScoreResult `json:"C_multi_indicator"`
+	AKeywordOnly    bool                 `json:"A_keyword_only"`
+	BVisibilityOnly bool                 `json:"B_visibility_only"`
+}
+
+func (c *Client) ScoreInjectionBaselines(url string, indicators map[string]int) (*InjectionBaselinesResult, error) {
+	body, err := json.Marshal(map[string]any{"url": url, "indicators": indicators})
+	if err != nil {
+		return nil, err
+	}
+	var result InjectionBaselinesResult
+	if err := c.postJSON("/score/injection/baselines", body, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 type PIIEntity struct {
 	Type  string `json:"type"`
 	Count int    `json:"count"`

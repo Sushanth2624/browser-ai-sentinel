@@ -153,12 +153,20 @@ sudo bash deploy/install-sensors.sh   # or: make sensor-up (also needs sudo)
 make health                            # now also reports bas-zeek / bas-suricata status
 ```
 
-This installs and starts `bas-zeek.service` and `bas-suricata.service` — new, separate systemd
-units from capstone-1's own (disabled/failed) `suricata.service`, own configs
-(`sensor/zeek/bas.zeek`, `sensor/suricata/suricata.yaml`), own log directories
-(`sensor/logs/{zeek,suricata}/`), watching this machine's real primary interface (`ens18`,
-confirmed via `ip route get 8.8.8.8`). The Go daemon tails both logs continuously (rebuild it
-after adding the sensors: `make agent-build`, then restart `daemon-run`).
+This installs and starts `bas-zeek.service`, `bas-zeek-lo.service`, and `bas-suricata.service` —
+new, separate systemd units from capstone-1's own (disabled/failed) `suricata.service`, own
+configs (`sensor/zeek/bas.zeek`, `sensor/suricata/suricata.yaml`), own log directories
+(`sensor/logs/{zeek,zeek-lo,suricata}/`), watching this machine's real primary interface (`ens18`,
+confirmed via `ip route get 8.8.8.8`) **and loopback**. The Go daemon tails all three logs
+continuously (rebuild it after adding the sensors: `make agent-build`, then restart `daemon-run`).
+
+**Why loopback too, added during Phase 3**: Phase 3's mock "unknown AI" endpoints
+(`sensor/mock-ai/`) run on this same host. Same-host traffic to a local address never transits the
+physical NIC — confirmed empirically, ens18-only capture saw nothing for it, `-i lo` did. Zeek
+only accepts one `-i` per process (hence the separate `bas-zeek-lo` service reusing the same
+script), while Suricata's `af-packet` config natively supports multiple interfaces in one process
+(just don't pass `-i` on its command line — that silently overrides the config's interface list
+down to one, which is exactly what broke this the first time).
 
 **A real bug worth keeping for the report**: `shadow_ai_clusters.confidence`'s column default was
 initially (mistakenly) `'candidate'` instead of `'observed'` — every single-domain fingerprint
@@ -174,11 +182,103 @@ second sighting — same JA3/JA4 both times since it's the same client — while
 other domains correctly stayed `"observed"`. A daemon restart mid-stream resumed from the
 persisted byte offset with no reprocessing and no gap.
 
+## Phase 3 setup — labeled dataset, mock AI, test fleet, A/B/C evaluation
+
+```
+make dataset-gen                       # 70 labeled synthetic pages -> eval/dataset/
+make dataset-serve                     # separate terminal, leave running — serves them on :8877
+make mock-ai-up                        # two local TLS "unknown AI" endpoints for shadow-AI testing
+make endpoints-build                   # builds the one shared endpoint image (Chrome + Go agent + extension)
+make endpoints-up                      # brings up 4 containers, each its own OS user/hostname
+make endpoints-test                    # runs driver.py inside each, one at a time
+make eval-run                          # A/B/C precision/recall/F1 against the labeled dataset
+```
+
+**Scope note, decided explicitly rather than following the original sketch literally**: the fleet
+does not log into real claude.ai/chatgpt.com accounts — creating multiple accounts on production
+third-party services purely to generate test traffic risks their ToS and is often unautomatable
+(email/phone verification). Instead: real AI domains' public pages (real SNI/JA3/JA4, no login),
+a local self-signed mock endpoint for shadow-AI clustering, a fully synthetic labeled dataset for
+injection detection, and the same safe DLP-test pattern already manually verified in Phase 1.
+
+**Four endpoints, varied behavior** (a better dashboard story than four identical runs, and each
+represents a distinct OS user + hostname in `endpoints`): `priya.sharma` and `arjun.mehta` are
+baseline/normal (dataset pages + known AI domains only); `karan.iyer` additionally visits both
+mock AI endpoints, which is what actually triggers shadow-AI clustering — the rule fires on **one
+fingerprint hitting ≥2 distinct unlisted domains**, so a single endpoint visiting both mock
+domains is sufficient on its own, no cross-endpoint coordination needed (an earlier draft of this
+plan implied otherwise — corrected once actually implemented); `divya.rao` additionally runs the
+DLP approval-gate test. All four visit the full 70-page dataset, so the A/B/C evaluation has up to
+4x coverage per page — which doubles as a determinism check (`eval/evaluate.py` flags it if the
+same static page ever gets a different verdict across visits, since detection should be
+deterministic).
+
+**Container networking**: `network_mode: host`, not a custom bridge — lets each container reach
+the host's already-loopback-bound Postgres (`:5433`) and ai-engine (`:8100`) directly without
+binding either to `0.0.0.0`, which would be a real exposure regression for this project's own
+database. Trade-off: each container's own Go daemon listens on a distinct port (`8091`-`8094`)
+since they share the host's network namespace; each still gets its own hostname (UTS namespace is
+independent of network namespace) and OS user for endpoint identity.
+
+**Chrome install note**: `chromium-browser` in Ubuntu 24.04's apt is a snap wrapper and doesn't
+function inside a container — confirmed via `apt-cache policy` before writing the Dockerfile.
+`endpoints/Dockerfile` installs `google-chrome-stable` from Google's own apt repo instead, and
+`endpoints/driver.py` installs the extension the same proven way as `test-pages/cdp_test.py`
+(`Extensions.loadUnpacked`, never `--load-extension`).
+
+### A/B/C results — real, from the fleet run
+
+| Detector | Precision | Recall | F1 | TP | FP | TN | FN |
+|---|---|---|---|---|---|---|---|
+| A — keyword-only | 0.754 | 0.817 | 0.784 | 98 | 32 | 128 | 22 |
+| B — visibility-only | 0.854 | 0.975 | 0.911 | 117 | 20 | 140 | 3 |
+| **C — multi-indicator** | **0.983** | **0.975** | **0.979** | 117 | **2** | 158 | 3 |
+
+280 matched alert rows (70-page dataset × 4 endpoints, minus a few known-AI/mock-domain visits
+that don't match the dataset manifest). C wins on every metric — same C > B > A shape as
+capstone 1's A/B/C result. The number that actually validates the whole module's design
+argument: **on the 40 hard-negative row-visits (10 pages × 4 endpoints, each carrying exactly one
+weak indicator), A false-positived 32 times, B false-positived 20 times, C only 2.** Full numbers
+in `eval/results/phase3-injection-eval.json`. Reproduce with `make dataset-gen`,
+`make dataset-serve`, `make mock-ai-up`, `make endpoints-build`, `make endpoints-up`,
+`make endpoints-test`, `make eval-run`.
+
+**Three real bugs found and fixed while getting this run to actually work — worth keeping for
+the report, they're better evidence of rigor than a clean first try would have been:**
+
+1. **The first full fleet run silently produced zero rows.** Every page reported as "visited" by
+   the driver, but nothing reached the daemon. Root cause: the container's native-messaging
+   registration had the exact same user-level-only gap already found and fixed on the host in
+   Phase 1 (a Chrome profile with a custom `--user-data-dir` doesn't discover
+   `~/.config/google-chrome/NativeMessagingHosts`, only the system-wide path) — but the fix was
+   never carried over into `endpoints/entrypoint.sh`. Compounding it: each container's daemon
+   listens on its own port (8091-8094), but `nmhost` defaults to 8090 and nothing told it
+   otherwise per-container. Fixed by registering system-wide in `entrypoint.sh` and having
+   `driver.py` pass `DAEMON_NM_URL` into Chrome's environment before launch.
+2. **Shadow-AI clustering silently never accumulated multi-domain evidence for real browser
+   traffic.** The original schema keyed `shadow_ai_clusters` on `(ja3, ja4)` together. Chrome's
+   GREASE mechanism randomizes reserved cipher/extension values in every ClientHello, which JA3's
+   naive hashing treats as signal — confirmed empirically, 10 of 12 real Chrome connections to the
+   same two mock endpoints each got a distinct JA3. JA4 is specifically designed to strip GREASE
+   before hashing and stayed identical across all of them. This only looked like it worked in
+   earlier manual testing because that testing used `curl`, which doesn't implement GREASE.
+   Re-keyed to JA4 alone (`sample_ja3` kept as an informational, non-matched column).
+3. **The extension's own DOM scanner skipped benign pages entirely.** `injection-scan.ts` only
+   messaged the daemon when at least one indicator was found locally — meaning the 30 pure-benign
+   dataset pages never got scored or logged at all, leaving no true-negative data for the eval
+   despite the daemon-side "log every score" change. Fixed by removing the early return so every
+   scan reports, clean or not.
+
+**A finding from actually running the shadow-AI clustering against real traffic, not a bug but
+worth being honest about**: once fixed, the JA4-keyed cluster containing the two mock domains
+also pulled in 16 other domains — routine Chrome background traffic (Google service checks,
+safebrowsing, update pings, Cloudflare challenges) that all share the same JA4 because it's
+literally "generic headless Chrome," not because any of it is AI-related. This is exactly the
+false-positive mode already flagged below as a known limitation, now demonstrated with real data
+instead of just argued for.
+
 ## What's not built yet (see plan's phasing)
 
-- **Phase 3**: the 4-5 Docker test endpoints + Playwright scripts + labeled A/B/C eval dataset —
-  this is also what will calibrate (or correct) the shadow-AI clustering heuristic below, which is
-  currently a first-cut judgment call, not a validated model.
 - **Phase 4**: the full EDR-style dashboard (`dashboard/` is currently empty — Phase 1's popup is
   a stand-in).
 
@@ -191,11 +291,19 @@ persisted byte offset with no reprocessing and no gap.
 - The DLP module's MITRE ATLAS technique ID is unresolved (`DLP-MODULE-TODO` in the schema) —
   manually confirm on atlas.mitre.org before citing an ID in the report; OWASP LLM Top 10
   LLM02:2025 is the safe interim citation.
-- `injection_scoring`'s indicator weights are a judgment-call starting point, not yet calibrated
-  against a labeled corpus — that calibration is Phase 3's job.
-- The shadow-AI clustering rule (≥2 distinct non-known domains sharing a JA3/JA4 fingerprint →
-  "candidate") is a first-cut heuristic, not validated against ground truth. It will produce false
-  positives from anything that legitimately reuses one TLS client across many domains — shared
-  corporate proxies, CDN-fronted services, browser extensions doing their own polling. Phase 3's
-  labeled dataset is what turns "candidate" into an actual precision/recall number instead of a
-  plausible-sounding rule.
+- `injection_scoring`'s indicator weights were a judgment-call starting point; Phase 3's fleet run
+  gave them a real (if modest, 70-page) evaluation — see the A/B/C table above — rather than
+  leaving them purely theoretical. Still worth a larger corpus before calling them calibrated.
+- The shadow-AI clustering rule (a JA4 fingerprint reused across ≥2 distinct non-known domains →
+  "candidate") is real and empirically confirmed to fire correctly, but its **precision in
+  practice is poor** — see the "finding from actually running" note above: one generic browser
+  fingerprint pulls in all of Chrome's own background traffic alongside genuine shadow-AI hits.
+  Usable as a triage signal (rank candidates for a human to check), not as an automated verdict,
+  without further refinement (e.g. excluding a browser's own well-known telemetry/update domains).
+- **A ~5% cross-visit determinism gap found during Phase 3 eval**: `eval/evaluate.py` flags when
+  the same static page gets a different flagged/a_flagged/b_flagged verdict across separate
+  visits — 14 such cases out of 280 matched rows, mostly on the keyword-only (A) baseline for
+  injected pages. Most likely cause: `injection-scan.ts` runs at `document_idle`, which can fire
+  before CSS/layout is fully resolved, occasionally letting hidden text leak into the
+  `innerText`-based visible-text scan on a race. Documented rather than chased further this
+  round — full detail in `eval/results/phase3-injection-eval.json`'s `determinism_issues`.

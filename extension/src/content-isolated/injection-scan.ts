@@ -102,10 +102,6 @@ function runScan(): IndicatorCounts {
   };
 }
 
-function hasAnyIndicator(indicators: IndicatorCounts): boolean {
-  return Object.values(indicators).some((v) => v > 0);
-}
-
 function showWarningBanner(result: InjectionScoreResult) {
   if (document.getElementById("browser-ai-sentinel-banner")) return;
   const banner = document.createElement("div");
@@ -138,7 +134,10 @@ function scheduleScan() {
   if (now - lastScanAt < SCAN_DEBOUNCE_MS) return;
   lastScanAt = now;
   const indicators = runScan();
-  if (!hasAnyIndicator(indicators)) return;
+  // Always report, even a clean zero-indicator scan: the daemon logs every score (not just
+  // flagged ones, see agent/cmd/daemon/main.go's handleInjection), and that log needs real true
+  // negatives to mean anything for Phase 3's precision/recall evaluation — a benign page that's
+  // never scored is indistinguishable from one that was never visited.
 
   const message: ExtensionMessage = {
     type: "injection",

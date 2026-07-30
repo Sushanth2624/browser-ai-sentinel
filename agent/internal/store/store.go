@@ -61,13 +61,21 @@ func (s *Store) InsertPlatformEvent(endpointID, sni, ja3, ja4, platformLabel str
 // seen under >=2 distinct domains (see the heuristic's rationale in db/schema.sql). Two
 // round trips (upsert the domain set, then re-derive confidence from its length) rather than one
 // dense CTE, favoring clarity over cleverness for a piece of logic a mentor/panel will read.
+//
+// Keyed on ja4 alone — NOT (ja3, ja4). Real finding from Phase 3 fleet testing: Chrome's GREASE
+// mechanism randomizes reserved cipher/extension values per ClientHello, making JA3 near-unique
+// per connection even from the same client (confirmed: 10 of 12 real Chrome connections to the
+// same two mock endpoints each got a distinct JA3). JA4 strips GREASE before hashing and stayed
+// stable across all of them. sample_ja3 is stored for observability only, not matched on — see
+// db/schema.sql's comment on shadow_ai_clusters for the full story.
 func (s *Store) UpsertShadowAICluster(ja3, ja4, domain string) (isCandidate bool, err error) {
 	var domainCount int
 	err = s.db.QueryRow(`
-		INSERT INTO shadow_ai_clusters (ja3, ja4, distinct_domains, occurrence_count)
+		INSERT INTO shadow_ai_clusters (ja4, sample_ja3, distinct_domains, occurrence_count)
 		VALUES ($1, $2, jsonb_build_array($3::text), 1)
-		ON CONFLICT (ja3, ja4) DO UPDATE SET
+		ON CONFLICT (ja4) DO UPDATE SET
 			last_seen = now(),
+			sample_ja3 = $2,
 			occurrence_count = shadow_ai_clusters.occurrence_count + 1,
 			distinct_domains = CASE
 				WHEN shadow_ai_clusters.distinct_domains @> jsonb_build_array($3::text)
@@ -75,7 +83,7 @@ func (s *Store) UpsertShadowAICluster(ja3, ja4, domain string) (isCandidate bool
 				ELSE shadow_ai_clusters.distinct_domains || jsonb_build_array($3::text)
 			END
 		RETURNING jsonb_array_length(distinct_domains)
-	`, ja3, ja4, domain).Scan(&domainCount)
+	`, ja4, ja3, domain).Scan(&domainCount)
 	if err != nil {
 		return false, fmt.Errorf("upsert shadow ai cluster: %w", err)
 	}
@@ -83,8 +91,8 @@ func (s *Store) UpsertShadowAICluster(ja3, ja4, domain string) (isCandidate bool
 	isCandidate = domainCount >= 2
 	if isCandidate {
 		if _, err := s.db.Exec(
-			`UPDATE shadow_ai_clusters SET confidence = 'candidate' WHERE ja3 = $1 AND ja4 = $2`,
-			ja3, ja4,
+			`UPDATE shadow_ai_clusters SET confidence = 'candidate' WHERE ja4 = $1`,
+			ja4,
 		); err != nil {
 			return false, fmt.Errorf("update shadow ai cluster confidence: %w", err)
 		}
@@ -135,17 +143,19 @@ func (s *Store) UpdateDLPDecision(id int64, approved bool) error {
 	return nil
 }
 
-func (s *Store) InsertInjectionAlert(endpointID, url string, score float64, indicators map[string]float64) (int64, error) {
+// InsertInjectionAlert records every scored page (not just flagged ones — see schema.sql's
+// comment on injection_alerts: Phase 3's eval needs true negatives, not just positives).
+func (s *Store) InsertInjectionAlert(endpointID, url string, score float64, flagged, aFlagged, bFlagged bool, indicators map[string]float64) (int64, error) {
 	indicatorsJSON, err := json.Marshal(indicators)
 	if err != nil {
 		return 0, fmt.Errorf("marshal indicators: %w", err)
 	}
 	var id int64
 	err = s.db.QueryRow(`
-		INSERT INTO injection_alerts (endpoint_id, url, score, indicators_json)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO injection_alerts (endpoint_id, url, score, flagged, a_flagged, b_flagged, indicators_json)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, endpointID, url, score, indicatorsJSON).Scan(&id)
+	`, endpointID, url, score, flagged, aFlagged, bFlagged, indicatorsJSON).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert injection alert: %w", err)
 	}
@@ -163,14 +173,14 @@ func (s *Store) RecentPlatformEvents(limit int) ([]map[string]any, error) {
 
 func (s *Store) RecentShadowAIClusters(limit int) ([]map[string]any, error) {
 	return s.queryRows(`
-		SELECT ja3, ja4, distinct_domains, occurrence_count, confidence, first_seen, last_seen
+		SELECT ja4, sample_ja3, distinct_domains, occurrence_count, confidence, first_seen, last_seen
 		FROM shadow_ai_clusters ORDER BY last_seen DESC LIMIT $1
 	`, limit)
 }
 
 func (s *Store) RecentInjectionAlerts(limit int) ([]map[string]any, error) {
 	return s.queryRows(`
-		SELECT id, endpoint_id, url, score, indicators_json, ts
+		SELECT id, endpoint_id, url, score, flagged, a_flagged, b_flagged, indicators_json, ts
 		FROM injection_alerts ORDER BY ts DESC LIMIT $1
 	`, limit)
 }

@@ -21,6 +21,15 @@ af-packet:
     cluster-id: 199
     cluster-type: cluster_flow
     defrag: yes
+  # Also watch loopback: Phase 3's mock "unknown AI" endpoints (sensor/mock-ai) run on this same
+  # host, and same-host traffic to a local address is handled internally by the kernel without
+  # ever transiting the physical NIC — confirmed empirically (ens18-only capture saw nothing for
+  # loopback TLS connections; -i lo does). A real deployment's actual AI-platform traffic goes out
+  # ens18 same as before; lo only matters for this test harness.
+  - interface: lo
+    cluster-id: 198
+    cluster-type: cluster_flow
+    defrag: yes
 
 outputs:
   - eve-log:

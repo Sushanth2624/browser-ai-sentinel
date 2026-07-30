@@ -7,7 +7,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStartPre=/bin/mkdir -p /home/analysis/browser-ai-sentinel/sensor/logs/suricata
-ExecStart=/usr/bin/suricata -c /home/analysis/browser-ai-sentinel/sensor/suricata/suricata.yaml -i ens18
+# No -i flag here: that would override the config's af-packet list (which watches BOTH ens18
+# and lo — see suricata.yaml's comment) down to a single interface. Confirmed empirically: with
+# -i ens18 present, lo-only traffic (the mock-ai endpoints) never appeared in eve.json at all.
+ExecStart=/usr/bin/suricata -c /home/analysis/browser-ai-sentinel/sensor/suricata/suricata.yaml --af-packet
 Restart=on-failure
 RestartSec=5
 User=root

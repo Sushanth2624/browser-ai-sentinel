@@ -30,3 +30,10 @@ data/
 *.log
 extension/extension_key_pub.b64
 sensor/logs/
+
+# Phase 3: generated dataset pages (deterministic — regenerate with `make dataset-gen`) and
+# self-signed mock-AI certs. manifest.json and eval/results/*.json ARE tracked — ground truth
+# and the actual evaluation evidence are worth keeping in the repo.
+eval/dataset/*.html
+sensor/mock-ai/certs/
+sensor/mock-ai/*.log

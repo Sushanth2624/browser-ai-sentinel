@@ -1,0 +1,155 @@
+{
+  "total_alert_rows": 289,
+  "matched_to_dataset": 280,
+  "unmatched_rows": 9,
+  "dataset_size": 70,
+  "hard_negative_count": 40,
+  "determinism_issues": [
+    {
+      "filename": "injected-29.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-28.html",
+      "key": "flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-28.html",
+      "key": "b_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-25.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-24.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-22.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-21.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-14.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-13.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-10.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-09.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "injected-00.html",
+      "key": "a_flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "hard-negative-08.html",
+      "key": "flagged",
+      "values": [
+        false,
+        true
+      ]
+    },
+    {
+      "filename": "hard-negative-06.html",
+      "key": "flagged",
+      "values": [
+        false,
+        true
+      ]
+    }
+  ],
+  "results": {
+    "A_keyword_only": {
+      "tp": 98,
+      "fp": 32,
+      "tn": 128,
+      "fn": 22,
+      "precision": 0.7538461538461538,
+      "recall": 0.8166666666666667,
+      "f1": 0.784
+    },
+    "B_visibility_only": {
+      "tp": 117,
+      "fp": 20,
+      "tn": 140,
+      "fn": 3,
+      "precision": 0.8540145985401459,
+      "recall": 0.975,
+      "f1": 0.9105058365758756
+    },
+    "C_multi_indicator": {
+      "tp": 117,
+      "fp": 2,
+      "tn": 158,
+      "fn": 3,
+      "precision": 0.9831932773109243,
+      "recall": 0.975,
+      "f1": 0.9790794979079498
+    }
+  },
+  "hard_negative_false_positives": {
+    "A_keyword_only": 32,
+    "B_visibility_only": 20,
+    "C_multi_indicator": 2
+  }
+}

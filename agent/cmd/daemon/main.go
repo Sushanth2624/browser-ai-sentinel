@@ -24,15 +24,15 @@ import (
 
 // Phase 1 stub — real classification moves to Zeek/Suricata SNI+JA3/JA4 in Phase 2.
 var knownAIDomains = map[string]string{
-	"claude.ai":                    "Anthropic Claude",
-	"api.anthropic.com":            "Anthropic Claude",
-	"chatgpt.com":                  "OpenAI ChatGPT",
-	"chat.openai.com":              "OpenAI ChatGPT",
-	"api.openai.com":               "OpenAI ChatGPT",
-	"gemini.google.com":            "Google Gemini",
+	"claude.ai":                         "Anthropic Claude",
+	"api.anthropic.com":                 "Anthropic Claude",
+	"chatgpt.com":                       "OpenAI ChatGPT",
+	"chat.openai.com":                   "OpenAI ChatGPT",
+	"api.openai.com":                    "OpenAI ChatGPT",
+	"gemini.google.com":                 "Google Gemini",
 	"generativelanguage.googleapis.com": "Google Gemini",
-	"perplexity.ai":                "Perplexity",
-	"copilot.microsoft.com":        "Microsoft Copilot",
+	"perplexity.ai":                     "Perplexity",
+	"copilot.microsoft.com":             "Microsoft Copilot",
 }
 
 type server struct {
@@ -70,18 +70,24 @@ func main() {
 	s := &server{db: db, ai: aiengine.NewClient(aiURL), endpointID: endpointID}
 
 	sensorLogDir := envOr("SENSOR_LOG_DIR", "/home/analysis/browser-ai-sentinel/sensor/logs")
-	zeekSSLLog := sensorLogDir + "/zeek/ssl.log"
+	// Two Zeek log paths: bas-zeek (ens18, real internet-bound AI traffic) and bas-zeek-lo (lo —
+	// needed because same-host traffic to a local address, like Phase 3's mock-ai endpoints,
+	// never transits the physical NIC; confirmed empirically, see sensor/zeek-lo's service unit).
+	zeekSSLLogs := []string{sensorLogDir + "/zeek/ssl.log", sensorLogDir + "/zeek-lo/ssl.log"}
 	suricataEveLog := sensorLogDir + "/suricata/eve.json"
 
-	go func() {
-		err := sensor.TailZeekSSL(zeekSSLLog, zeekSSLLog+".offset", s.ingestSensorEvent)
-		log.Fatalf("zeek tailer exited: %v", err)
-	}()
+	for _, path := range zeekSSLLogs {
+		path := path
+		go func() {
+			err := sensor.TailZeekSSL(path, path+".offset", s.ingestSensorEvent)
+			log.Fatalf("zeek tailer (%s) exited: %v", path, err)
+		}()
+	}
 	go func() {
 		err := sensor.TailSuricataEve(suricataEveLog, suricataEveLog+".offset", s.ingestSensorEvent)
 		log.Fatalf("suricata tailer exited: %v", err)
 	}()
-	log.Printf("sensor tailers started: zeek=%s suricata=%s", zeekSSLLog, suricataEveLog)
+	log.Printf("sensor tailers started: zeek=%v suricata=%s", zeekSSLLogs, suricataEveLog)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
@@ -97,8 +103,8 @@ func main() {
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":      "ok",
-		"endpoint_id": s.endpointID,
+		"status":       "ok",
+		"endpoint_id":  s.endpointID,
 		"ai_engine_ok": s.ai.Healthy(),
 	})
 }
@@ -155,16 +161,19 @@ func (s *server) handleInjection(payload json.RawMessage) (any, error) {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return nil, err
 	}
-	scored, err := s.ai.ScoreInjection(req.URL, req.Indicators)
+	baselines, err := s.ai.ScoreInjectionBaselines(req.URL, req.Indicators)
 	if err != nil {
 		return nil, err
 	}
-	if scored.Flagged {
-		if _, err := s.db.InsertInjectionAlert(s.endpointID, req.URL, scored.Score, scored.ContributingIndicators); err != nil {
-			log.Printf("insert injection alert: %v", err)
-		}
+	// Every scored page is recorded, not just flagged ones — Phase 3's A/B/C evaluation needs
+	// true negatives (a benign page that correctly scored low) as much as true positives.
+	if _, err := s.db.InsertInjectionAlert(
+		s.endpointID, req.URL, baselines.C.Score, baselines.C.Flagged,
+		baselines.AKeywordOnly, baselines.BVisibilityOnly, baselines.C.ContributingIndicators,
+	); err != nil {
+		log.Printf("insert injection alert: %v", err)
 	}
-	return scored, nil
+	return baselines.C, nil
 }
 
 func (s *server) handleDLPCheck(payload json.RawMessage) (any, error) {
