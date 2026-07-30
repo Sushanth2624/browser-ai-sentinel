@@ -1,0 +1,16 @@
+[Unit]
+Description=Browser AI Sentinel - Suricata sensor (JA3/JA4 fingerprinting on ens18)
+Documentation=https://github.com/Sushanth2624/browser-ai-sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /home/analysis/browser-ai-sentinel/sensor/logs/suricata
+ExecStart=/usr/bin/suricata -c /home/analysis/browser-ai-sentinel/sensor/suricata/suricata.yaml -i ens18
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

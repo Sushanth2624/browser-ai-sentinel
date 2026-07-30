@@ -1,9 +1,11 @@
 // Command daemon is the always-on, systemd-managed half of the agent (see plan's process-model
-// split). Phase 1: serves the extension's events over HTTP, calls the Python ai-engine for
-// scoring/classification, writes to Postgres, and classifies AI platforms via a static domain
-// list (Zeek/Suricata JA3/JA4 wiring — real shadow-AI discovery — is Phase 2, not built yet;
-// is_shadow_ai is hardcoded false here and source is tagged "domain-stub" so this limitation is
-// visible in the data, not silently implied to be more than it is).
+// split). Serves the extension's events over HTTP, calls the Python ai-engine for
+// scoring/classification, writes to Postgres, and classifies AI platforms two ways: the client
+// (extension) declares the domain it's on via handlePlatformCheck (fast, simple, Phase 1), and
+// — as of Phase 2 — a pair of background goroutines tail the standalone Zeek/Suricata sensors'
+// logs for the authoritative network-layer signal (real SNI/JA3/JA4, plus shadow-AI clustering
+// for domains not on the known-AI list). Both paths write to platform_events, tagged by source,
+// so neither replaces the other — see db/schema.sql and agent/internal/sensor.
 package main
 
 import (
@@ -16,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/Sushanth2624/browser-ai-sentinel/agent/internal/aiengine"
+	"github.com/Sushanth2624/browser-ai-sentinel/agent/internal/sensor"
 	"github.com/Sushanth2624/browser-ai-sentinel/agent/internal/store"
 )
 
@@ -66,11 +69,27 @@ func main() {
 
 	s := &server{db: db, ai: aiengine.NewClient(aiURL), endpointID: endpointID}
 
+	sensorLogDir := envOr("SENSOR_LOG_DIR", "/home/analysis/browser-ai-sentinel/sensor/logs")
+	zeekSSLLog := sensorLogDir + "/zeek/ssl.log"
+	suricataEveLog := sensorLogDir + "/suricata/eve.json"
+
+	go func() {
+		err := sensor.TailZeekSSL(zeekSSLLog, zeekSSLLog+".offset", s.ingestSensorEvent)
+		log.Fatalf("zeek tailer exited: %v", err)
+	}()
+	go func() {
+		err := sensor.TailSuricataEve(suricataEveLog, suricataEveLog+".offset", s.ingestSensorEvent)
+		log.Fatalf("suricata tailer exited: %v", err)
+	}()
+	log.Printf("sensor tailers started: zeek=%s suricata=%s", zeekSSLLog, suricataEveLog)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/nm", s.handleNM)
 	mux.HandleFunc("/api/injection_alerts", s.handleRecentInjectionAlerts)
 	mux.HandleFunc("/api/dlp_events", s.handleRecentDLPEvents)
+	mux.HandleFunc("/api/platform_events", s.handleRecentPlatformEvents)
+	mux.HandleFunc("/api/shadow_ai_clusters", s.handleRecentShadowAIClusters)
 
 	log.Printf("daemon listening on %s (ai-engine=%s)", listenAddr, aiURL)
 	log.Fatal(http.ListenAndServe(listenAddr, mux))
@@ -208,6 +227,30 @@ func (s *server) handlePlatformCheck(payload json.RawMessage) (any, error) {
 	}, nil
 }
 
+// ingestSensorEvent is the callback wired to both sensor tailers (main()). Classifies against
+// the same knownAIDomains map handlePlatformCheck uses, and — for domains NOT on that list —
+// runs the shadow-AI clustering heuristic (store.UpsertShadowAICluster): a TLS fingerprint
+// reused across >=2 distinct unlisted domains is flagged as a shadow-AI candidate. This is the
+// real, network-authoritative counterpart to handlePlatformCheck's client-declared stub.
+func (s *server) ingestSensorEvent(e sensor.Event) {
+	domain := strings.ToLower(e.SNI)
+	label, known := knownAIDomains[domain]
+
+	isShadowAI := false
+	if !known && e.JA3 != "" && e.JA4 != "" {
+		candidate, err := s.db.UpsertShadowAICluster(e.JA3, e.JA4, domain)
+		if err != nil {
+			log.Printf("shadow ai cluster upsert: %v", err)
+		} else {
+			isShadowAI = candidate
+		}
+	}
+
+	if err := s.db.InsertPlatformEvent(s.endpointID, domain, e.JA3, e.JA4, label, isShadowAI, e.Source); err != nil {
+		log.Printf("insert platform event (sensor): %v", err)
+	}
+}
+
 func (s *server) handleAccountSighting(payload json.RawMessage) (any, error) {
 	var req struct {
 		Platform        string `json:"platform"`
@@ -235,6 +278,26 @@ func (s *server) handleRecentInjectionAlerts(w http.ResponseWriter, r *http.Requ
 func (s *server) handleRecentDLPEvents(w http.ResponseWriter, r *http.Request) {
 	limit := parseLimit(r, 20)
 	rows, err := s.db.RecentDLPEvents(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, jsonSafeRows(rows))
+}
+
+func (s *server) handleRecentPlatformEvents(w http.ResponseWriter, r *http.Request) {
+	limit := parseLimit(r, 20)
+	rows, err := s.db.RecentPlatformEvents(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, jsonSafeRows(rows))
+}
+
+func (s *server) handleRecentShadowAIClusters(w http.ResponseWriter, r *http.Request) {
+	limit := parseLimit(r, 20)
+	rows, err := s.db.RecentShadowAIClusters(limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return

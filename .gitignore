@@ -29,3 +29,4 @@ data/
 .DS_Store
 *.log
 extension/extension_key_pub.b64
+sensor/logs/

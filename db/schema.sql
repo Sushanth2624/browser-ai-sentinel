@@ -70,3 +70,19 @@ CREATE TABLE IF NOT EXISTS injection_alerts (
     ts                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_injection_alerts_endpoint_ts ON injection_alerts (endpoint_id, ts DESC);
+
+-- Phase 2: shadow-AI discovery. A (ja3, ja4) TLS client fingerprint reused across multiple
+-- distinct domains NOT on the known-AI list is a candidate signal for programmatic API traffic
+-- (one SDK/HTTP client hitting several LLM-shaped endpoints) rather than organic browsing.
+-- This is an honest first-cut heuristic (see agent/internal/sensor), not a calibrated model —
+-- Phase 3's labeled dataset is what validates or corrects it.
+CREATE TABLE IF NOT EXISTS shadow_ai_clusters (
+    ja3               TEXT NOT NULL,
+    ja4               TEXT NOT NULL,
+    first_seen        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    distinct_domains  JSONB NOT NULL DEFAULT '[]',  -- array of domain strings observed under this fingerprint
+    occurrence_count   INT NOT NULL DEFAULT 1,
+    confidence        TEXT NOT NULL DEFAULT 'observed',  -- 'observed' -> 'candidate' once distinct_domains >= 2
+    PRIMARY KEY (ja3, ja4)
+);

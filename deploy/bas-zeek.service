@@ -1,0 +1,19 @@
+[Unit]
+Description=Browser AI Sentinel - Zeek sensor (JA3/JA4 fingerprinting on ens18)
+Documentation=https://github.com/Sushanth2624/browser-ai-sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /home/analysis/browser-ai-sentinel/sensor/logs/zeek
+WorkingDirectory=/home/analysis/browser-ai-sentinel/sensor/logs/zeek
+# -C: this VM's ens18 (virtio NIC) has checksum offloading, so Zeek sees "invalid" TCP checksums
+# on outbound packets and silently drops them without this flag — see sensor/zeek/bas.zeek.
+ExecStart=/opt/zeek/bin/zeek -C -i ens18 /home/analysis/browser-ai-sentinel/sensor/zeek/bas.zeek
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

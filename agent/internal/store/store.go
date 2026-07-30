@@ -56,6 +56,42 @@ func (s *Store) InsertPlatformEvent(endpointID, sni, ja3, ja4, platformLabel str
 	return nil
 }
 
+// UpsertShadowAICluster records a (ja3, ja4) fingerprint sighting under the given domain and
+// returns whether it now qualifies as a shadow-AI "candidate" — i.e. this fingerprint has been
+// seen under >=2 distinct domains (see the heuristic's rationale in db/schema.sql). Two
+// round trips (upsert the domain set, then re-derive confidence from its length) rather than one
+// dense CTE, favoring clarity over cleverness for a piece of logic a mentor/panel will read.
+func (s *Store) UpsertShadowAICluster(ja3, ja4, domain string) (isCandidate bool, err error) {
+	var domainCount int
+	err = s.db.QueryRow(`
+		INSERT INTO shadow_ai_clusters (ja3, ja4, distinct_domains, occurrence_count)
+		VALUES ($1, $2, jsonb_build_array($3::text), 1)
+		ON CONFLICT (ja3, ja4) DO UPDATE SET
+			last_seen = now(),
+			occurrence_count = shadow_ai_clusters.occurrence_count + 1,
+			distinct_domains = CASE
+				WHEN shadow_ai_clusters.distinct_domains @> jsonb_build_array($3::text)
+				THEN shadow_ai_clusters.distinct_domains
+				ELSE shadow_ai_clusters.distinct_domains || jsonb_build_array($3::text)
+			END
+		RETURNING jsonb_array_length(distinct_domains)
+	`, ja3, ja4, domain).Scan(&domainCount)
+	if err != nil {
+		return false, fmt.Errorf("upsert shadow ai cluster: %w", err)
+	}
+
+	isCandidate = domainCount >= 2
+	if isCandidate {
+		if _, err := s.db.Exec(
+			`UPDATE shadow_ai_clusters SET confidence = 'candidate' WHERE ja3 = $1 AND ja4 = $2`,
+			ja3, ja4,
+		); err != nil {
+			return false, fmt.Errorf("update shadow ai cluster confidence: %w", err)
+		}
+	}
+	return isCandidate, nil
+}
+
 func (s *Store) InsertAccountSighting(endpointID, platform, accountIdentity string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO ai_account_sightings (endpoint_id, platform, account_identity)
@@ -118,6 +154,20 @@ func (s *Store) InsertInjectionAlert(endpointID, url string, score float64, indi
 
 // Recent* are read-only helpers used by the Phase-1 verification endpoints and, later, the
 // dashboard API.
+func (s *Store) RecentPlatformEvents(limit int) ([]map[string]any, error) {
+	return s.queryRows(`
+		SELECT id, endpoint_id, sni, ja3, ja4, platform_label, is_shadow_ai, source, ts
+		FROM platform_events ORDER BY ts DESC LIMIT $1
+	`, limit)
+}
+
+func (s *Store) RecentShadowAIClusters(limit int) ([]map[string]any, error) {
+	return s.queryRows(`
+		SELECT ja3, ja4, distinct_domains, occurrence_count, confidence, first_seen, last_seen
+		FROM shadow_ai_clusters ORDER BY last_seen DESC LIMIT $1
+	`, limit)
+}
+
 func (s *Store) RecentInjectionAlerts(limit int) ([]map[string]any, error) {
 	return s.queryRows(`
 		SELECT id, endpoint_id, url, score, indicators_json, ts

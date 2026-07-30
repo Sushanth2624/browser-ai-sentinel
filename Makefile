@@ -1,7 +1,7 @@
-.PHONY: setup db-up db-down ai-engine-run agent-build daemon-run extension-build health test clean
+.PHONY: setup db-up db-down ai-engine-run agent-build daemon-run extension-build health test clean sensor-up sensor-down sensor-status
 
 setup: db-up ai-engine-setup agent-build extension-build
-	@echo "Phase 1 setup complete. Run 'make ai-engine-run' and 'make daemon-run' in separate terminals, then load extension/dist unpacked in chrome://extensions."
+	@echo "Phase 1 setup complete. Run 'make sensor-up' (once, needs root), 'make ai-engine-run' and 'make daemon-run' in separate terminals, then load extension/dist unpacked in chrome://extensions."
 
 db-up:
 	cd db && docker compose up -d
@@ -24,9 +24,20 @@ daemon-run: agent-build
 extension-build:
 	cd extension && npm install --no-fund --no-audit && npx tsc --noEmit && node build.mjs
 
+sensor-up:
+	sudo bash deploy/install-sensors.sh
+
+sensor-down:
+	sudo systemctl stop bas-zeek bas-suricata
+
+sensor-status:
+	systemctl status bas-zeek bas-suricata --no-pager
+
 health:
 	@echo "-- ai-engine :8100 --"; curl -sf http://127.0.0.1:8100/health || echo "DOWN"
 	@echo "-- daemon :8090 --"; curl -sf http://127.0.0.1:8090/health || echo "DOWN"
+	@echo "-- bas-zeek --"; systemctl is-active bas-zeek || echo "DOWN"
+	@echo "-- bas-suricata --"; systemctl is-active bas-suricata || echo "DOWN"
 
 test:
 	cd agent && go vet ./... && go build ./...

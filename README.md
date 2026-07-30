@@ -19,15 +19,19 @@ Full design rationale, threat model, and phasing are in
 2. **Outbound DLP/exfiltration gate** — on known AI domains, a MAIN-world script intercepts
    `fetch`/`XHR` bodies before they're sent, classifies them for PII/secrets, and holds the
    request pending user approval (via a Chrome notification with Allow/Block buttons) if flagged.
-3. **AI-platform / shadow-AI discovery** — Phase 1 uses a static known-domain list as a stub;
-   Phase 2 wires in Zeek/Suricata JA3/JA4 fingerprinting for real network-layer identification,
-   including unlisted "shadow AI" services.
+3. **AI-platform / shadow-AI discovery** — a standalone Zeek + Suricata sensor pair (own configs,
+   own systemd services, watching this machine's real NIC — see Phase 2 below) extracts real
+   SNI/JA3/JA4 per TLS connection. Known AI domains get labeled directly; a TLS fingerprint reused
+   across ≥2 distinct *unlisted* domains is flagged as a shadow-AI candidate — the idea being a
+   shared client fingerprint hitting several LLM-shaped endpoints looks like programmatic API
+   traffic, not organic browsing. The extension's own client-declared domain check (Phase 1) stays
+   as an additional, faster signal — both write to the same table, tagged by source.
 
 **Explicitly IDS, not IPS**: the extension can warn the human but cannot block an AI agent that
 reads a page via its own privileged channel (e.g. CDP/accessibility tree) rather than the visible
 DOM.
 
-## Architecture (Phase 1)
+## Architecture (Phase 1 + 2)
 
 ```
 Chrome extension (TypeScript, MV3)
@@ -42,16 +46,24 @@ Chrome extension (TypeScript, MV3)
 agent/cmd/nmhost   (ephemeral, Chrome-spawned, stdio<->HTTP shim, no logic of its own)
         │ HTTP :8090
         ▼
-agent/cmd/daemon   (persistent — systemd in later phases; run manually for Phase 1)
-        │ HTTP :8100                         │ Postgres :5433
-        ▼                                     ▼
+agent/cmd/daemon  ◄──── agent/internal/sensor tailers (byte-offset persisted, resume-safe)
+   │        ▲                    ▲
+   │        │              ssl.log (JSON)         eve.json (JSON, tls events)
+   │        │                    │                        │
+   │        │             bas-zeek.service          bas-suricata.service
+   │        │             (Zeek + ja3/ja4 zkg)       (Suricata, JA3/JA4 native)
+   │        │                    └──────────── both watch ens18 (real NIC) ────────┘
+   │        │
+   │  HTTP :8100                         │ Postgres :5433
+   ▼        │                            ▼
 ai-engine (Python/FastAPI)          db/ (schema.sql, docker-compose.yml)
-  injection_scoring, pii_detection, atlas_mapping
+  injection_scoring, pii_detection, atlas_mapping     platform_events, shadow_ai_clusters, ...
 ```
 
 Ports (chosen to avoid collision with the unrelated capstone-1 services already running on this
 VM — see the plan for the full list checked via `ss -tlnp`): Postgres `5433`, Go daemon `8090`,
-ai-engine `8100`, dashboard (Phase 4) `3000`.
+ai-engine `8100`, dashboard (Phase 4) `3000`. The two sensor services don't listen on any port —
+they only write to their own log files under `sensor/logs/`.
 
 ## Phase 1 setup
 
@@ -134,12 +146,39 @@ Expect: a Chrome notification asking Allow/Block; on Block, the fetch call rejec
 `AbortError`; either way, a new row appears in `dlp_events` with `matched_entities` populated.
 Un-acknowledged prompts auto-deny after 30s (fail-closed).
 
+## Phase 2 setup — real network sensor
+
+```
+sudo bash deploy/install-sensors.sh   # or: make sensor-up (also needs sudo)
+make health                            # now also reports bas-zeek / bas-suricata status
+```
+
+This installs and starts `bas-zeek.service` and `bas-suricata.service` — new, separate systemd
+units from capstone-1's own (disabled/failed) `suricata.service`, own configs
+(`sensor/zeek/bas.zeek`, `sensor/suricata/suricata.yaml`), own log directories
+(`sensor/logs/{zeek,suricata}/`), watching this machine's real primary interface (`ens18`,
+confirmed via `ip route get 8.8.8.8`). The Go daemon tails both logs continuously (rebuild it
+after adding the sensors: `make agent-build`, then restart `daemon-run`).
+
+**A real bug worth keeping for the report**: `shadow_ai_clusters.confidence`'s column default was
+initially (mistakenly) `'candidate'` instead of `'observed'` — every single-domain fingerprint
+sighting showed up as a "candidate" immediately, defeating the whole point of the ≥2-distinct-
+domains rule. Caught by testing against real ambient traffic (this machine's own background
+services — `mail.google.com`, `telemetry.elastic.co` — showed as false candidates on one sighting
+each) rather than only testing the happy path. Fixed in `db/schema.sql` and via a one-time
+`UPDATE` on the already-running database.
+
+**Verified against real traffic**: a curl client hitting two distinct non-known-AI domains
+(`api.github.com`, then `httpbin.org`) correctly triggered `confidence: "candidate"` on the
+second sighting — same JA3/JA4 both times since it's the same client — while single sightings of
+other domains correctly stayed `"observed"`. A daemon restart mid-stream resumed from the
+persisted byte offset with no reprocessing and no gap.
+
 ## What's not built yet (see plan's phasing)
 
-- **Phase 2**: real Zeek/Suricata JA3/JA4 network sensor (currently a domain-list stub —
-  `is_shadow_ai` is hardcoded `false`, `source` is tagged `"domain-stub"` in every
-  `platform_events` row so this limitation is visible in the data itself).
-- **Phase 3**: the 4-5 Docker test endpoints + Playwright scripts + labeled A/B/C eval dataset.
+- **Phase 3**: the 4-5 Docker test endpoints + Playwright scripts + labeled A/B/C eval dataset —
+  this is also what will calibrate (or correct) the shadow-AI clustering heuristic below, which is
+  currently a first-cut judgment call, not a validated model.
 - **Phase 4**: the full EDR-style dashboard (`dashboard/` is currently empty — Phase 1's popup is
   a stand-in).
 
@@ -154,3 +193,9 @@ Un-acknowledged prompts auto-deny after 30s (fail-closed).
   LLM02:2025 is the safe interim citation.
 - `injection_scoring`'s indicator weights are a judgment-call starting point, not yet calibrated
   against a labeled corpus — that calibration is Phase 3's job.
+- The shadow-AI clustering rule (≥2 distinct non-known domains sharing a JA3/JA4 fingerprint →
+  "candidate") is a first-cut heuristic, not validated against ground truth. It will produce false
+  positives from anything that legitimately reuses one TLS client across many domains — shared
+  corporate proxies, CDN-fronted services, browser extensions doing their own polling. Phase 3's
+  labeled dataset is what turns "candidate" into an actual precision/recall number instead of a
+  plausible-sounding rule.
