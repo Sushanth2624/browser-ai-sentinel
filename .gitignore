@@ -37,3 +37,7 @@ sensor/logs/
 eval/dataset/*.html
 sensor/mock-ai/certs/
 sensor/mock-ai/*.log
+
+# Report build venv — the generated .docx/.pdf ARE tracked (they're the deliverable/evidence,
+# same pattern as capstone-1's committed report), only the venv itself is excluded.
+docs/report/.venv/

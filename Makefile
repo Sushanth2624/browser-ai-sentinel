@@ -2,7 +2,8 @@
         sensor-up sensor-down sensor-status \
         dataset-gen dataset-serve mock-ai-up mock-ai-down \
         endpoints-build endpoints-up endpoints-down endpoints-test eval-run \
-        dashboard-setup dashboard-dev
+        dashboard-setup dashboard-dev \
+        report-setup report-build
 
 setup: db-up ai-engine-setup agent-build extension-build
 	@echo "Phase 1 setup complete. Run 'make sensor-up' (once, needs root), 'make ai-engine-run' and 'make daemon-run' in separate terminals, then load extension/dist unpacked in chrome://extensions."
@@ -86,6 +87,15 @@ dashboard-setup:
 dashboard-dev:
 	cd dashboard && npm run dev
 
+# --- Capstone report ------------------------------------------------------------------------
+
+report-setup:
+	cd docs/report && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
+
+report-build:
+	cd docs/report && .venv/bin/python build_report.py && \
+	libreoffice --headless --convert-to pdf Browser_AI_Sentinel_Final_Report_Sushanth_Sridhar.docx
+
 health:
 	@echo "-- ai-engine :8100 --"; curl -sf http://127.0.0.1:8100/health || echo "DOWN"
 	@echo "-- daemon :8090 --"; curl -sf http://127.0.0.1:8090/health || echo "DOWN"
@@ -98,4 +108,4 @@ test:
 	cd extension && npx tsc --noEmit
 
 clean:
-	rm -rf agent/bin extension/dist extension/node_modules ai-engine/.venv eval/dataset eval/results dashboard/node_modules dashboard/dist
+	rm -rf agent/bin extension/dist extension/node_modules ai-engine/.venv eval/dataset eval/results dashboard/node_modules dashboard/dist docs/report/.venv
