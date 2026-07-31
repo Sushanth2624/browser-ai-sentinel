@@ -299,10 +299,10 @@ def code(text: str):
 
 
 def bullet(text: str, style="List Bullet"):
-    p = doc.add_paragraph(text, style=style)
-    for r in p.runs:
-        r.font.name = TIMES
-        r.font.size = Pt(12)
+    # backtick-aware like rich_para/add_rich_run — several callers (Chapter 11, Appendix
+    # reproduction notes) put `make target` style code spans inside bullets.
+    p = doc.add_paragraph(style=style)
+    add_rich_run(p, text)
     return p
 
 
@@ -508,10 +508,10 @@ for abbr, expansion in _ABBR:
     row.cells[1].text = expansion
 
 front_heading("List of Figures")
-placeholder("[Populated at final assembly, Stage 6 — see Fig labels generated throughout the report]")
+_fig_list_anchor = placeholder("[Populated at final assembly below, from the real Fig labels generated while building this document]")
 
 front_heading("List of Tables")
-placeholder("[Populated at final assembly, Stage 6 — see Table labels generated throughout the report]")
+_table_list_anchor = placeholder("[Populated at final assembly below, from the real Table labels generated while building this document]")
 
 # --- Abstract ---
 front_heading("Abstract")
@@ -583,10 +583,8 @@ front_heading("Table of Contents")
 add_toc_field()
 
 # ---------------------------------------------------------------------------
-# STAGE 1 — Chapter skeleton (headings only; content filled in later stages)
+# Chapter content
 # ---------------------------------------------------------------------------
-
-STAGE_PENDING = "[Content pending — see build plan for staging]"
 
 chapter_heading("Introduction", 1)
 subheading("The Shift From a Network Perimeter to an Agentic Browser Perimeter")
@@ -1414,14 +1412,127 @@ bullet("14 cross-visit determinism issues remain open across 280 scored rows (~5
        "reported as an unresolved limitation in Chapter 11 rather than smoothed over.")
 
 chapter_heading("Conclusions and Future Scope", 11)
+rich_para(
+    "This project set out to answer whether a client-side browser extension, backed by a small "
+    "local pipeline, could meaningfully detect indirect prompt injection, discover AI platforms a "
+    "browser talks to (including ones no vendor domain-list has catalogued), and gate outbound "
+    "PII before it reaches an AI service — and to answer that with real, run evidence rather than "
+    "prose claims. Across four build phases and a real 4-endpoint fleet, the multi-indicator "
+    "detector reached 0.983 precision at 0.975 recall against a labelled dataset, materially ahead "
+    "of either single-indicator baseline; the shadow-AI module surfaced a genuine, previously "
+    "undocumented-for-this-project instability in JA3 under Chrome's real GREASE behaviour; and "
+    "the DLP gate was verified to block a real synthetic PII match end to end. Nine distinct real "
+    "defects were found and fixed across the four phases (Chapter 5.3) plus two more found while "
+    "capturing report evidence (Chapters 7 and 9), each by actually running the system and looking "
+    "at real output rather than assuming a clean build meant correct behaviour."
+)
 subheading("Limitations")
-para(STAGE_PENDING, italic=True)
+bullet("Cross-visit determinism gap: 14 of 280 scored rows (5%) received a different `flagged` "
+       "verdict across repeated visits to the same static page in the Phase 3 fleet run. The "
+       "scoring function itself is pure and deterministic (Chapter 8.1); the most likely cause is "
+       "timing-dependent partial DOM scans rather than the scorer, but this was not root-caused "
+       "within this project's scope and is reported as open, not silently averaged away.")
+bullet("Shadow-AI clustering precision: the JA4-based heuristic (Chapter 8.2, Chapter 10.3) finds "
+       "\"one TLS client talking to several unlisted hosts,\" which clusters ordinary shared "
+       "HTTP-client traffic alongside genuine shadow-AI use. It is a triage signal for a small "
+       "deployment, not an automated verdict, and the dashboard labels it as such.")
+bullet("Host-level, not per-container, network-sensor attribution (Chapter 10.4): packet capture "
+       "alone cannot attribute a given TLS connection to a specific process without deeper "
+       "host-side correlation, which was out of scope here.")
+bullet("PII/DLP classification is regex-and-Luhn only (Chapter 8.3): it reliably catches "
+       "structured entities (email, phone, SSN, card numbers, common API-key formats) but cannot "
+       "catch unstructured sensitive content such as a person's name in prose or a pasted "
+       "business strategy paragraph — an NER-based upgrade path is noted but not built.")
+bullet("The outbound-DLP module's MITRE ATLAS technique ID is unresolved (Chapter 2, Chapter 5): "
+       "the authoritative atlas.mitre.org site is a JavaScript single-page application that could "
+       "not be fetched directly during threat-model scoping, and secondary sources disagreed on "
+       "what AML.T0025 actually names. OWASP LLM02:2025 is used as the confirmed interim citation "
+       "rather than guessing the ATLAS ID.")
+bullet("Single-user ethical scope: the network-sensor and shadow-AI evaluation observed real "
+       "traffic only on the author's own single-user deployment machine, which the author "
+       "self-consented to monitor — explicitly a lighter-weight ethical posture than monitoring a "
+       "shared or third-party network, and not evidence of how the system would perform (or what "
+       "consent/notice requirements would apply) at real multi-user department scale.")
+bullet("AI-account-sighting detection (identifying which logged-in AI account a browser is using) "
+       "was implemented as a schema and API surface (`ai_account_sightings`) but its detection "
+       "logic was not independently verified with the same rigor as the other three modules, and "
+       "is reported here as unverified rather than claimed working.")
 subheading("Future Scope")
-para(STAGE_PENDING, italic=True)
+bullet("Root-cause the 5% determinism gap — most likely by instrumenting the content script's "
+       "DOM-scan timing relative to page load events across repeated real visits — and either fix "
+       "it or narrow its cause precisely enough to bound its impact on the reported metrics.")
+bullet("Upgrade PII/DLP classification from regex-and-Luhn to a named-entity-recognition model "
+       "(e.g. Presidio) for unstructured sensitive content (names, addresses, free-text business "
+       "detail) that no regex pattern can reliably catch.")
+bullet("Extend shadow-AI clustering beyond a single JA4-plus-domain-count heuristic — for example "
+       "combining it with connection-timing or request-size patterns characteristic of chat-style "
+       "traffic — to reduce the false-positive rate documented in Chapter 10.3.")
+bullet("Resolve the DLP module's MITRE ATLAS technique ID against the authoritative source once "
+       "atlas.mitre.org's content is reachable by an automated tool, rather than continuing to "
+       "rely on the OWASP interim citation.")
+bullet("Move network-sensor deployment per-container (or per-process, via eBPF-based attribution) "
+       "so shadow-AI and platform events are attributed to the actual originating endpoint rather "
+       "than the host running the sensor.")
+bullet("Extend the client-side detector to the browser-agent-specific threat surface named in the "
+       "literature (Chapter 2) but not directly tested here — spoofed AI-sidebar UI and "
+       "screenshot-borne prompt injection — since this project's DOM scanner currently inspects "
+       "text-bearing HTML, not rendered pixels or extension UI surfaces.")
+bullet("Broaden the known-AI-domain list and re-run the A/B/C evaluation against a larger, "
+       "more diverse labelled dataset (beyond the 70-page synthetic set) as a natural next-scale "
+       "validation step before any real department-wide pilot.")
 
 # --- Bibliography ---
 front_heading("Bibliography")
-para(STAGE_PENDING, italic=True)
+_BIBLIOGRAPHY = [
+    "Brave, \"Indirect Prompt Injection Remains a Fundamental Security Challenge for AI,\" "
+    "Brave Blog. https://brave.com/blog/indirect-prompt-injection/",
+    "Google, \"AI Threats in the Wild: The Current State of Prompt Injections on the Web,\" "
+    "Google Online Security Blog, Apr. 2026. "
+    "https://security.googleblog.com/2026/04/ai-threats-in-wild-current-state-of.html",
+    "Mozilla 0DIN, reported in Help Net Security, \"Mozilla Warns of Indirect Prompt Injection "
+    "Risk in AI Coding Agents,\" Jun. 2026. "
+    "https://www.helpnetsecurity.com/2026/06/29/mozilla-warns-of-indirect-prompt-injection-risk-in-ai-coding-agents/",
+    "Unit 42, Palo Alto Networks, \"Fooling AI Agents: Web-Based Indirect Prompt Injection "
+    "Observed in the Wild,\" Mar. 2026. https://unit42.paloaltonetworks.com/ai-agent-prompt-injection/",
+    "Zscaler ThreatLabz, \"Indirect Prompt Injection in Web Content Targets AI Agents,\" Jul. 2026. "
+    "https://www.zscaler.com/blogs/security-research/indirect-prompt-injection-web-content-targets-ai-agents",
+    "LayerX Security, reported in Forbes, \"ChatGPT Atlas '90% More Vulnerable' to Attacks Than "
+    "Google Chrome, Report Says,\" Oct. 2025. "
+    "https://www.forbes.com/sites/zakdoffman/2025/10/27/chatgpt-atlas-soundly-beaten-by-google-chrome-browse-carefully/",
+    "CyberScoop, \"OpenAI Says Prompt Injection May Never Be 'Solved' for Browser Agents Like "
+    "Atlas,\" Dec. 2025. "
+    "https://cyberscoop.com/openai-chatgpt-atlas-prompt-injection-browser-agent-security-update-head-of-preparedness/",
+    "OpenAI, \"Continuously Hardening ChatGPT Atlas Against Prompt Injection Attacks,\" Dec. 2025. "
+    "https://openai.com/index/hardening-atlas-against-prompt-injection/",
+    "Norrrrrrr-lyn et al., \"WAInjectBench: Benchmarking Prompt Injection Detections for Web "
+    "Agents,\" arXiv:2510.01354, 2025. https://arxiv.org/abs/2510.01354",
+    "\"Prompt Injection Detection Is Regime-Dependent: A Deployment-Aware Evaluation with "
+    "Interpretable Structural Signals,\" arXiv:2605.26999, 2026. https://arxiv.org/pdf/2605.26999",
+    "Nightfall AI, \"Prevent Data Leakage to Shadow AI.\" "
+    "https://www.nightfall.ai/solutions/prevent-data-leakage-to-shadow-ai — representative of the "
+    "browser-extension-based shadow-AI DLP product category also including Strac and Microsoft "
+    "Purview's browser extension.",
+    "MITRE ATLAS, \"LLM Prompt Injection: Indirect (AML.T0051.001).\" "
+    "https://atlas.mitre.org/techniques/AML.T0051.001 — verified via a secondary mirror "
+    "(startupdefense.io) since the authoritative site is a JavaScript SPA not directly fetchable "
+    "by this project's tooling; see Chapter 2.5.",
+    "OWASP Gen AI Security Project, \"LLM02:2025 Sensitive Information Disclosure.\" "
+    "https://genai.owasp.org/llmrisk/llm022025-sensitive-information-disclosure/",
+    "J. Althouse, J. Atkinson, J. Atkins (Salesforce Engineering), \"Open Sourcing JA3,\" 2017. "
+    "https://engineering.salesforce.com/open-sourcing-ja3-92c9e53c3c41/ ; "
+    "https://github.com/salesforce/ja3",
+    "FoxIO, \"JA4+ Network Fingerprinting.\" https://blog.foxio.io/ja4+-network-fingerprinting",
+    "Praetorian, \"Introducing Augustus: Open Source LLM Prompt Injection Tool.\" "
+    "https://www.praetorian.com/blog/introducing-augustus-open-source-llm-prompt-injection/ ; "
+    "https://github.com/praetorian-inc/augustus",
+    "Protect AI, \"Rebuff: LLM Prompt Injection Detector.\" https://github.com/protectai/rebuff",
+]
+for i, entry in enumerate(_BIBLIOGRAPHY, start=1):
+    p = doc.add_paragraph()
+    p.paragraph_format.left_indent = Inches(0.3)
+    p.paragraph_format.first_line_indent = Inches(-0.3)
+    p.paragraph_format.space_after = Pt(8)
+    add_rich_run(p, f"[{i}] {entry}")
 
 # --- Appendix ---
 front_heading("Appendix")
@@ -1448,8 +1559,53 @@ para("https://github.com/Sushanth2624/browser-ai-sentinel")
 p = doc.add_paragraph(style="Heading 2")
 r = p.add_run("Additional Reproduction Notes")
 r.font.name, r.font.size, r.bold = TIMES, Pt(12), True
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "Every result in this report is reproducible from the repository's own `make` targets, in "
+    "the order below (see the repository README for full prerequisites and port numbers):"
+)
+bullet("`make db-up` — starts Postgres (Docker, port 5433) and applies `db/schema.sql`.")
+bullet("`make ai-engine-setup && make ai-engine-run` — Python scoring/DLP/ATLAS service on :8100.")
+bullet("`make agent-build && make daemon-run` — Go native-messaging relay and HTTP API on :8090.")
+bullet("`make extension-build` — builds the extension to `extension/dist`, loaded unpacked.")
+bullet("`sudo make sensor-up` — installs and starts the Zeek/Suricata systemd units (Phase 2).")
+bullet("`make dataset-gen && make dataset-serve` — regenerates the deterministic 70-page "
+       "labelled dataset and serves it on :8877 (Phase 3).")
+bullet("`make endpoints-build && make endpoints-up && make endpoints-test` — builds and runs the "
+       "4-container test fleet against the served dataset (Phase 3).")
+bullet("`make eval-run` — recomputes Table 10.1 and the hard-negative results (Table 10.2) "
+       "directly from whatever is currently in Postgres.")
+bullet("`make dashboard-setup && make dashboard-dev` — the governance dashboard on :3000.")
+bullet("`make test` — the clean `go vet`/`go build`/`tsc --noEmit` pass shown in Fig 9.1.")
+bullet("`make report-setup && make report-build` — rebuilds this document itself, including "
+       "regenerating every diagram and chart from `docs/report/gen_diagrams.py` and "
+       "`docs/report/gen_eval_chart.py`.")
+rich_para(
+    "No step in this list depends on the author's prior capstone (`dns-https-c2-ueba-detection`) "
+    "in any way — this repository is fully standalone, per the project's own scoping constraint "
+    "stated at the outset (Chapter 1)."
+)
 
 # ---------------------------------------------------------------------------
+# Final assembly: the List of Figures/Tables can only be written now that every figure() and
+# table() call earlier in the script has recorded its real label+caption in _figures_list /
+# _tables_list — inserted back before the front-matter placeholder paragraphs via python-docx's
+# insert_paragraph_before, then the placeholders themselves are deleted.
+# ---------------------------------------------------------------------------
+
+def _fill_list_placeholder(anchor_paragraph, entries, kind):
+    if not entries:
+        p = anchor_paragraph.insert_paragraph_before(f"[No {kind.lower()}s in this document]")
+        p.runs[0].font.name, p.runs[0].font.size, p.runs[0].italic = TIMES, Pt(12), True
+    for label, caption in entries:
+        p = anchor_paragraph.insert_paragraph_before()
+        add_rich_run(p, f"{kind} {label}: {caption}")
+    anchor_el = anchor_paragraph._p
+    anchor_el.getparent().remove(anchor_el)
+
+
+_fill_list_placeholder(_fig_list_anchor, _figures_list, "Fig")
+_fill_list_placeholder(_table_list_anchor, _tables_list, "Table")
+
 doc.save(OUT_PATH)
 print(f"Saved {OUT_PATH} ({datetime.datetime.now().isoformat(timespec='seconds')})")
+print(f"  {len(_figures_list)} figures, {len(_tables_list)} tables listed.")
