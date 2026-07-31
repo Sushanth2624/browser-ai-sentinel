@@ -93,6 +93,8 @@ def setup_styles():
     cap.font.name = TIMES
     cap.font.size = Pt(12)
     cap.font.bold = True
+    cap.font.italic = False
+    cap.font.color.rgb = RGBColor(0, 0, 0)
     cap.paragraph_format.line_spacing = 1.0
     cap.paragraph_format.space_before = Pt(4)
     cap.paragraph_format.space_after = Pt(10)
@@ -263,6 +265,17 @@ def add_rich_run(paragraph, text: str, bold=False, base_size=12):
             run.font.name = TIMES
             run.font.size = Pt(base_size)
         run.bold = bold
+
+
+def rich_para(text: str, space_after: int | None = None):
+    """Paragraph-level equivalent of add_rich_run — for prose that contains `backtick`
+    code/identifier spans, so they render in monospace instead of as literal backtick
+    characters (the same class of bug fixed in Chapter 5.3, now handled generically)."""
+    p = doc.add_paragraph()
+    add_rich_run(p, text)
+    if space_after is not None:
+        p.paragraph_format.space_after = Pt(space_after)
+    return p
 
 
 def code(text: str):
@@ -967,11 +980,79 @@ para(
 
 chapter_heading("Software Design", 7)
 subheading("System Architecture")
-para(STAGE_PENDING, italic=True)
+para(
+    "The system is a single-host pipeline of five long-running components plus one passive "
+    "network sensor, spanning four languages chosen for the layer each is strongest at: "
+    "TypeScript for the in-browser observation surface (Manifest V3 gives no other realistic "
+    "choice), Go for a small, low-overhead, always-on local daemon, Python for the scoring and "
+    "classification logic where a rich ecosystem of text-processing and ML-adjacent libraries "
+    "matters, and SQL/Postgres as the single source of truth every other component reads from or "
+    "writes to. No component trusts another's judgement silently: the extension observes and "
+    "reports, the daemon relays and persists, the scoring service decides, and the dashboard only "
+    "ever reads already-decided data back out."
+)
+rich_para(
+    "The extension cannot talk to the local agent directly over a socket — Manifest V3 confines "
+    "an extension to `chrome.runtime` messaging — so a short-lived native-messaging shim "
+    "(`nmhost`), spawned by Chrome itself per connection, relays each message over stdio to the "
+    "persistent Go daemon's HTTP API. The daemon is the only component that talks to Postgres for "
+    "writes, and the only component that talks to the Python scoring service, which keeps the "
+    "extension itself free of any network or database credentials. The network sensor "
+    "(Zeek + Suricata) is architecturally separate from this request path entirely: it watches "
+    "the NIC passively and writes its own JSON logs, which the daemon tails on a background "
+    "goroutine — the sensor has no awareness that the extension or daemon exist, and vice versa."
+)
+figure("assets/fig_7_1_architecture.png",
+       "System architecture — component layout and the two independent capture paths "
+       "(request/response via native messaging, and passive network capture via the sensor).")
 subheading("Data Flow: Browser Event to Stored Verdict")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "Every scored event, regardless of which module produced it, follows the same five-hop path "
+    "from the page to a stored row: the content script observes something on the real page (a "
+    "DOM mutation for injection scanning, a `fetch`/`XMLHttpRequest` body for the DLP gate), "
+    "hands it to the background service worker, which opens a native-messaging connection that "
+    "Chrome turns into a fresh `nmhost` process, which relays over stdio to the already-running "
+    "Go daemon. The daemon calls the Python scoring service synchronously and blocks on its "
+    "verdict before replying — this matters specifically for the DLP path, where the extension "
+    "must not release an outbound request until an approval decision comes back, not merely log "
+    "it after the fact."
+)
+para(
+    "The daemon writes every verdict to Postgres unconditionally, not only the ones that cross "
+    "the flag threshold — a deliberate design decision, and the fix for a real bug described in "
+    "Chapter 5.3 (“Extension silently skipped benign pages”): without a complete record of "
+    "benign, unflagged events, there is no true-negative population and no way to compute a real "
+    "precision/recall table in Chapter 9."
+)
+figure("assets/fig_7_2_dataflow.png",
+       "Data flow for a single browser event, from DOM/network observation through scoring to a "
+       "stored verdict and the return path for a DLP approval gate.")
 subheading("Module Design")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The repository is organised as one top-level directory per language/responsibility boundary, "
+    "which also matches how the four objectives in Chapter 4 map onto code: injection detection "
+    "and the DLP gate are almost entirely `extension/` + `ai-engine/`, AI-platform/shadow-AI "
+    "identification is almost entirely `agent/` + `sensor/`, and the governance dashboard is its "
+    "own `dashboard/` module reading exclusively through new server-side aggregate endpoints "
+    "rather than raw tables."
+)
+table(
+    ["Directory", "Language", "Responsibility", "Objective(s)"],
+    [
+        ["extension/", "TypeScript", "DOM scanning, request interception, native-messaging client", "1, 3"],
+        ["agent/", "Go", "Native-messaging relay, HTTP API, sensor log tailing, Postgres writes", "1, 2, 3"],
+        ["ai-engine/", "Python", "Indicator scoring, PII/DLP classification, ATLAS mapping", "1, 3"],
+        ["sensor/", "Zeek/Suricata config", "Passive TLS SNI/JA3/JA4 capture", "2"],
+        ["db/", "SQL", "Schema — single source of truth for all modules", "1, 2, 3, 4"],
+        ["dashboard/", "React/TypeScript", "Governance-style read-only visualisation", "4"],
+        ["eval/", "Python", "Labelled dataset generation and A/B/C evaluation", "1, 4"],
+        ["endpoints/", "Docker/Python", "Four-container multi-endpoint test fleet", "4"],
+    ],
+    "Module-to-objective mapping",
+)
+figure("assets/fig_7_3_modules.png",
+       "Module / repository dependency diagram, showing which directory depends on or drives "
+       "which other directory.")
 
 chapter_heading("Implementation", 8)
 subheading("Objective 1 — Multi-Indicator Prompt-Injection Detection")
