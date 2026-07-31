@@ -240,7 +240,15 @@ def table(headers: list[str], rows: list[list[str]], caption_text: str, widths=N
             r.font.name = TIMES
             r.font.size = Pt(11)
     if widths:
+        # Word/LibreOffice ignore per-cell widths under the default "autofit to contents"
+        # layout — column widths only take effect once the table is switched to fixed layout,
+        # and even then both the column AND every cell in it need the width set explicitly
+        # (a documented python-docx quirk, confirmed here by the "Configuration" column still
+        # wrapping to three lines despite widths being passed, until both were set).
+        t.autofit = False
+        t.allow_autofit = False
         for i, w in enumerate(widths):
+            t.columns[i].width = Inches(w)
             for row in t.rows:
                 row.cells[i].width = Inches(w)
     para("", size=1)  # small breathing room after the table
@@ -1231,23 +1239,179 @@ rich_para(
 
 chapter_heading("Testing and Validation", 9)
 subheading("Build and Type Verification")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "Before any functional or evaluation testing, both compiled components are checked for a "
+    "clean build: `go vet ./...` and `go build ./...` for the agent, and `npx tsc --noEmit` for "
+    "the extension (`make test`). All three genuinely produce zero output on success — a clean "
+    "static-analysis pass has nothing to report — so the terminal capture below is shown "
+    "alongside its exit code specifically to demonstrate that absence of output means success "
+    "here, not that the check silently did nothing."
+)
+figure("assets/fig_9_2_test_clean.png",
+       "Real terminal capture of `make test` (go vet, go build, tsc --noEmit) — clean pass, "
+       "exit code 0.")
 subheading("Functional Test Cases (Mapped to Objectives)")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "Each objective has at least one functional check that exercises the real running system end "
+    "to end, not a unit test against a mocked dependency. Objective 1 is checked by installing "
+    "the actual built extension into a real headless Chrome instance via the "
+    "`Extensions.loadUnpacked` DevTools Protocol command — the same technique used throughout "
+    "this project after `--load-extension` was found not to reliably install a Manifest V3 "
+    "extension on this Chrome build (Chapter 5.3) — navigating to a real page from the labelled "
+    "dataset, and confirming both that the extension's own deterministic ID "
+    "(`infjoghmhbkbhohajodjccgphpgejkip`, pinned via the manifest's signing key) matches what a "
+    "manual install would produce, and that the DOM actually contains the rendered warning "
+    "banner with the expected score."
+)
+figure("assets/fig_9_1_banner.png",
+       "Real warning banner rendered by the actual extension against a real page "
+       "(`injected-00.html`) from the Phase 3 labelled dataset — not a mockup.")
+rich_para(
+    "Capturing this screenshot surfaced a genuine layout bug not caught by any of the automated "
+    "checks: the banner is `position: fixed` and was not pushing the rest of the page down, so it "
+    "visually overlapped the page's own top content instead of sitting above it. `go vet` and "
+    "`tsc --noEmit` cannot catch this class of defect — it is only visible by actually looking at "
+    "rendered output — and it was fixed by measuring the banner's own rendered height and adding "
+    "it to the page body's margin-top (`extension/src/content-isolated/injection-scan.ts`); the "
+    "screenshot above is the corrected version, captured after the fix and rebuild."
+)
+rich_para(
+    "Objective 2 is checked the same way network-sensor behaviour was validated in Chapter 5.3: "
+    "by comparing Zeek's `ssl.log` against `conn.log` for the same capture window and confirming "
+    "TLS records are actually present, and by querying `shadow_ai_clusters` directly to confirm "
+    "`ON CONFLICT (ja4)` upserts accumulate `distinct_domains` correctly across repeated real "
+    "connections. Objective 3 is checked by triggering `patchedFetch` against a request body "
+    "containing a fabricated but Luhn-valid card number and confirming the request throws "
+    "`AbortError` rather than reaching the network, and separately confirming a clean request "
+    "passes through untouched. Objective 4 is checked by curling every dashboard aggregate "
+    "endpoint directly against the live daemon and confirming each returns real, non-empty JSON "
+    "computed from the fleet's actual accumulated data, not a fixture."
+)
 subheading("Headline Results (Configuration A vs B vs C)")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "`make eval-run` re-executes the real evaluation described in Chapter 5.2 against whatever "
+    "data currently sits in Postgres: it fetches every row from `/api/injection_alerts`, joins "
+    "each row to the labelled dataset by filename, and computes precision/recall/F1 for all three "
+    "configurations from that join — never from hand-computed or cached numbers. The run captured "
+    "below matched 280 of 289 alert rows to the 70-page dataset (9 unmatched rows are earlier, "
+    "now-superseded runs against the same dataset still sitting in the table) and flagged 14 "
+    "cross-visit determinism issues, both discussed further in Chapter 10."
+)
+figure("assets/fig_9_3_eval_run.png",
+       "Real terminal capture of `make eval-run` against the live database — the same numbers "
+       "analysed in Chapter 10, not a separately typed table.")
 
 chapter_heading("Analysis and Results", 10)
 subheading("Headline Comparison")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "Configuration C (the full six-indicator, noisy-OR detector) reaches 0.983 precision at 0.975 "
+    "recall — matching Configuration B's recall exactly while cutting its false positives from 20 "
+    "to 2, and clearly beating Configuration A on every metric. This is the central empirical "
+    "claim of Objective 1: combining indicators does not trade recall for precision, it improves "
+    "precision while holding recall at the better single-indicator baseline's level."
+)
+figure("assets/fig_10_2_abc_comparison.png",
+       "Precision, recall, and F1 for Configurations A, B, and C on the real 4-endpoint fleet run "
+       "(70-page labelled dataset, 280 matched rows).")
+table(
+    ["Configuration", "Precision", "Recall", "F1", "TP", "FP", "TN", "FN"],
+    [
+        ["A — keyword-only", "0.754", "0.817", "0.784", "98", "32", "128", "22"],
+        ["B — visibility-only", "0.854", "0.975", "0.911", "117", "20", "140", "3"],
+        ["C — multi-indicator", "0.983", "0.975", "0.979", "117", "2", "158", "3"],
+    ],
+    "Full confusion-matrix results, Configurations A/B/C (280 matched rows)",
+    widths=[1.6, 0.9, 0.8, 0.55, 0.4, 0.4, 0.4, 0.4],
+)
 subheading("Why Every Single Indicator Falls Short")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The hard-negative subset of the dataset — 10 pages, each carrying exactly one weak "
+    "indicator (a single zero-width-Unicode character, not four) and no injection intent — exists "
+    "specifically to separate “fires on any signal” from “fires on convincing evidence.” Scored "
+    "across all four fleet endpoints (40 hard-negative rows total), the single-indicator "
+    "baselines over-fire badly: Configuration A flags 32 of 40, Configuration B flags 20 of 40. "
+    "Configuration C flags only 2 of 40 — the noisy-OR combination correctly treats one weak, "
+    "isolated indicator as weak evidence rather than sufficient evidence, which a threshold on any "
+    "single indicator alone cannot do by construction."
+)
+table(
+    ["Configuration", "Hard-negative rows flagged", "of 40"],
+    [
+        ["A — keyword-only", "32", "80.0%"],
+        ["B — visibility-only", "20", "50.0%"],
+        ["C — multi-indicator", "2", "5.0%"],
+    ],
+    "False positives on the hard-negative subset, by configuration",
+)
 subheading("The Shadow-AI Clustering Finding")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The most significant methodological finding of this project did not come from the injection "
+    "dataset at all, but from watching real Chrome traffic while validating Objective 2: an "
+    "identical real browser making repeated real TLS connections to the same two test domains "
+    "produced a distinct JA3 fingerprint on ten of twelve connections, while JA4 stayed identical "
+    "across all twelve. Root cause is Chrome's GREASE mechanism, which deliberately randomises "
+    "reserved cipher-suite and extension values in every ClientHello specifically to defeat "
+    "fingerprint-based tracking — and JA3's hash includes those randomised values, while JA4's "
+    "does not. Earlier informal testing had used `curl` rather than real Chrome and appeared to "
+    "show JA3 working fine, purely because `curl` does not implement GREASE; the discrepancy was "
+    "only caught by testing against the actual browser traffic the system is meant to observe in "
+    "production, not a convenient stand-in for it."
+)
+table(
+    ["Fingerprint", "Distinct values across 12 real Chrome connections"],
+    [
+        ["JA3 (Salesforce, GREASE-naive)", "10 distinct (unstable)"],
+        ["JA4 (FoxIO, GREASE-aware)", "1 distinct (stable)"],
+    ],
+    "JA3 vs JA4 stability under Chrome's real GREASE behaviour",
+)
+rich_para(
+    "This finding changed the schema, not just a parameter: `shadow_ai_clusters` was re-keyed "
+    "from `(ja3, ja4)` to `ja4` alone (Chapter 8.2), with JA3 downgraded to an informational-only "
+    "column. Reported as a limitation, not a solved problem: JA4 clusters by TLS client library, "
+    "not by AI-specific behaviour, so two unrelated services sharing an HTTP client (or SDK "
+    "version) would also cluster — the heuristic finds “one client talking to several unlisted "
+    "hosts,” which is a reasonable proxy for shadow AI at university/small-company scale but not "
+    "proof of it."
+)
 subheading("Fleet-Wide Endpoint Attribution")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The dashboard's live endpoint rollup (captured directly from the running system, not "
+    "constructed for the report) shows the real per-endpoint split produced by the Phase 3 fleet "
+    "run: each of the four simulated-user containers (`karan.iyer`, `divya.rao`, `priya.sharma`, "
+    "`arjun.mehta`) shows its own injection-alert and DLP-flagged counts, while the host endpoint "
+    "(`root`) is the only row showing `shadow_ai_involved = true` and any AI-account sightings — "
+    "because it is the only endpoint whose agent tails the network sensor's logs. This is the "
+    "clearest visible instance of the architectural limitation noted in Chapter 5.3: network-"
+    "sensor-derived events are attributed to whichever endpoint's agent is watching the NIC, not "
+    "to whichever process actually generated the traffic, since the Phase 3 containers do not run "
+    "their own sensor."
+)
+figure("assets/fig_10_1_dashboard.png",
+       "The live governance dashboard, captured directly from the running system — real KPIs, "
+       "real AI-asset visibility (78 shadow-AI candidates, top 20 shown), real ATLAS coverage, "
+       "and the real per-endpoint rollup showing host-only shadow-AI attribution.")
 subheading("Summary of Findings")
-para(STAGE_PENDING, italic=True)
+bullet("Multi-indicator combination (Objective 1) measurably outperforms either single-indicator "
+       "baseline on real data: 0.983 precision at 0.975 recall for Configuration C, versus 0.854/"
+       "0.975 for B and 0.754/0.817 for A, with the gap concentrated almost entirely in false "
+       "positives (2 vs 20 vs 32) rather than missed detections.")
+bullet("The hard-negative subset shows why: single indicators over-fire on weak, isolated "
+       "evidence (50-80% false-positive rate), while the noisy-OR combination correctly treats "
+       "one weak signal as weak evidence (5%).")
+bullet("Shadow-AI discovery (Objective 2) is only reliable when keyed on a GREASE-aware "
+       "fingerprint (JA4); the GREASE-naive alternative (JA3) is empirically unstable against "
+       "real Chrome traffic, not merely theoretically weaker — a finding that required testing "
+       "against the real browser, not a convenient substitute, to surface.")
+bullet("The DLP gate (Objective 3) is verified to block on a real synthetic PII match end to end, "
+       "including the case that most needed a false-positive guard (Luhn validation on candidate "
+       "card numbers) and the four real request-body shapes a browser can actually send.")
+bullet("The dashboard and test fleet (Objective 4) surface a real architectural limitation "
+       "honestly rather than hiding it: network-sensor attribution is host-level, not per-"
+       "container, and this is visible directly in the live rollup, not just stated in prose.")
+bullet("14 cross-visit determinism issues remain open across 280 scored rows (~5%) — the same "
+       "static page occasionally received a different verdict on different visits — and are "
+       "reported as an unresolved limitation in Chapter 11 rather than smoothed over.")
 
 chapter_heading("Conclusions and Future Scope", 11)
 subheading("Limitations")

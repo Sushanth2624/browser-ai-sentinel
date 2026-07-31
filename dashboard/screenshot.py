@@ -44,7 +44,8 @@ try:
             if resp.get("id") == mid:
                 return resp
 
-    time.sleep(3)  # let React render + first data fetch complete
+    time.sleep(7)  # let React render + all panel data fetches complete (endpoints panel's own
+                    # fetch was still pending at 3s, leaving "Loading..." in a captured screenshot)
     metrics = call(1, "Page.getLayoutMetrics")
     height = int(metrics["result"]["cssContentSize"]["height"])
     call(2, "Emulation.setDeviceMetricsOverride", {"width": 1280, "height": min(height, 3000), "deviceScaleFactor": 1, "mobile": False})

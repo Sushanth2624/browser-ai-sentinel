@@ -124,6 +124,11 @@ function showWarningBanner(result: InjectionScoreResult) {
     textAlign: "center",
   } satisfies Partial<CSSStyleDeclaration>);
   document.documentElement.appendChild(banner);
+  // The banner is position:fixed so it doesn't participate in document flow — without this,
+  // it overlaps whatever was already at the top of the page instead of pushing it down (found
+  // by actually looking at a captured screenshot, where it visibly covered the page's own <h1>).
+  const originalMarginTop = parseFloat(getComputedStyle(document.body).marginTop) || 0;
+  document.body.style.marginTop = `${originalMarginTop + banner.offsetHeight}px`;
 }
 
 let lastScanAt = 0;
