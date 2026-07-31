@@ -97,6 +97,13 @@ func main() {
 	mux.HandleFunc("/api/platform_events", s.handleRecentPlatformEvents)
 	mux.HandleFunc("/api/shadow_ai_clusters", s.handleRecentShadowAIClusters)
 
+	// Phase 4 dashboard aggregate endpoints — see dashboard.go
+	mux.HandleFunc("/api/dashboard/kpis", s.handleDashboardKPIs)
+	mux.HandleFunc("/api/dashboard/endpoints", s.handleDashboardEndpoints)
+	mux.HandleFunc("/api/dashboard/asset-visibility", s.handleDashboardAssetVisibility)
+	mux.HandleFunc("/api/dashboard/atlas", s.handleDashboardAtlas)
+	mux.HandleFunc("/api/dashboard/endpoint-activity", s.handleDashboardEndpointActivity)
+
 	log.Printf("daemon listening on %s (ai-engine=%s)", listenAddr, aiURL)
 	log.Fatal(http.ListenAndServe(listenAddr, mux))
 }

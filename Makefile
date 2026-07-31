@@ -1,7 +1,8 @@
 .PHONY: setup db-up db-down ai-engine-run agent-build daemon-run extension-build health test clean \
         sensor-up sensor-down sensor-status \
         dataset-gen dataset-serve mock-ai-up mock-ai-down \
-        endpoints-build endpoints-up endpoints-down endpoints-test eval-run
+        endpoints-build endpoints-up endpoints-down endpoints-test eval-run \
+        dashboard-setup dashboard-dev
 
 setup: db-up ai-engine-setup agent-build extension-build
 	@echo "Phase 1 setup complete. Run 'make sensor-up' (once, needs root), 'make ai-engine-run' and 'make daemon-run' in separate terminals, then load extension/dist unpacked in chrome://extensions."
@@ -77,6 +78,14 @@ endpoints-test:
 eval-run:
 	python3 eval/evaluate.py
 
+# --- Phase 4: dashboard --------------------------------------------------------------------
+
+dashboard-setup:
+	cd dashboard && npm install --no-fund --no-audit
+
+dashboard-dev:
+	cd dashboard && npm run dev
+
 health:
 	@echo "-- ai-engine :8100 --"; curl -sf http://127.0.0.1:8100/health || echo "DOWN"
 	@echo "-- daemon :8090 --"; curl -sf http://127.0.0.1:8090/health || echo "DOWN"
@@ -89,4 +98,4 @@ test:
 	cd extension && npx tsc --noEmit
 
 clean:
-	rm -rf agent/bin extension/dist extension/node_modules ai-engine/.venv eval/dataset eval/results
+	rm -rf agent/bin extension/dist extension/node_modules ai-engine/.venv eval/dataset eval/results dashboard/node_modules dashboard/dist
