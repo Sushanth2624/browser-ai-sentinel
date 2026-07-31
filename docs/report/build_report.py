@@ -1056,13 +1056,178 @@ figure("assets/fig_7_3_modules.png",
 
 chapter_heading("Implementation", 8)
 subheading("Objective 1 — Multi-Indicator Prompt-Injection Detection")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The content script (`extension/src/content-isolated/injection-scan.ts`) walks the live DOM "
+    "for six indicators — off-screen CSS positioning, zero-width Unicode characters, HTML "
+    "comments, `hidden`/`aria-hidden` attributes on elements carrying instruction-shaped text, "
+    "JSON-LD metadata blocks, and visible imperative-to-AI language — and sends the raw counts, "
+    "never a pre-computed verdict, to the Python scoring service. Keeping the counting and the "
+    "scoring in separate modules across a process/language boundary is deliberate: it is what "
+    "makes the A/B/C comparison in Chapter 9 possible, since Configurations A and B are computed "
+    "from exactly the same indicator counts as C, not from a separately run pass."
+)
+rich_para(
+    "The scoring service combines indicator counts with a noisy-OR formula rather than a simple "
+    "weighted sum. Each indicator is treated as independent evidence; the probability that a page "
+    "is benign is the product of each indicator's individual “not evidence” probability, so any "
+    "single strong indicator can already push the score past the flag threshold, and two "
+    "moderate indicators combine to more evidence than either alone — the actual property a "
+    "“multi-indicator” detector is supposed to have. An earlier version of this function used a "
+    "plain weighted average instead, which failed exactly that property: a real two-indicator "
+    "sample scored below threshold as a combination despite each indicator separately being "
+    "enough to flag it under the single-indicator baselines (Chapter 5.3)."
+)
+code(
+    "def score_indicators(indicators):\n"
+    "    survival = 1.0  # P(none of the indicators is evidence)\n"
+    "    for name, weight in INDICATOR_WEIGHTS.items():\n"
+    "        count = counts.get(name, 0)\n"
+    "        if count > 0:\n"
+    "            # diminishing returns, caps at 3 repeats\n"
+    "            strength = weight * min(count, 3) / 3\n"
+    "            survival *= (1 - strength)\n"
+    "    normalized = round(1 - survival, 4)\n"
+    "    return InjectionScoreResponse(\n"
+    "        score=normalized,\n"
+    "        flagged=normalized >= FLAG_THRESHOLD,\n"
+    "    )"
+)
+rich_para(
+    "Weights (zero-width Unicode 1.0, off-screen CSS 0.9, imperative language 0.8, "
+    "`aria-hidden`/`alt` 0.7, HTML comment 0.6, JSON-LD 0.5) reflect how hard each indicator is "
+    "to trigger by accident: zero-width Unicode characters essentially never occur in ordinary "
+    "page content, so their presence is treated as near-certain evidence, while a single "
+    "imperative sentence is weighted lower since ordinary instructional web copy can resemble it. "
+    "`FLAG_THRESHOLD = 0.5` and the per-indicator weights were set by judgment before Chapter 9's "
+    "labelled dataset existed, and are reported, not re-tuned to the evaluation data afterwards — "
+    "tuning a threshold against the same data used to report its precision/recall would inflate "
+    "the numbers artificially."
+)
 subheading("Objective 2 — AI-Platform and Shadow-AI Discovery")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "Known-platform identification is a static domain map (`knownAIDomains` in "
+    "`agent/cmd/daemon/main.go`) checked against each connection's TLS SNI. Shadow-AI discovery — "
+    "finding AI-shaped traffic to domains not on that list — instead clusters connections by TLS "
+    "client fingerprint on the theory that a browser or SDK talking to several different "
+    "unlisted hostnames with an identical, distinctive TLS fingerprint is more likely to be one "
+    "AI client library than several unrelated services. The clustering key is critical here and "
+    "was wrong in an earlier version: it must be JA4, not JA3."
+)
+rich_para(
+    "JA3 (Salesforce) and JA4 (FoxIO) both hash properties of a TLS ClientHello into a short "
+    "fingerprint, but only JA4 is GREASE-aware. Chrome's GREASE mechanism deliberately randomises "
+    "reserved cipher-suite and extension values in every ClientHello it sends, specifically to "
+    "stop exactly this kind of fingerprint-based clustering — and JA3's hash includes those "
+    "randomised values, so it changes on every connection from the same real browser. This was "
+    "confirmed empirically, not assumed: ten of twelve real Chrome connections to the same two "
+    "test domains each produced a distinct JA3, while JA4 (which strips GREASE values before "
+    "hashing) stayed identical across all twelve. `shadow_ai_clusters` is keyed on JA4 alone, "
+    "with JA3 retained only as an informational `sample_ja3` column."
+)
+code(
+    "INSERT INTO shadow_ai_clusters\n"
+    "    (ja4, sample_ja3, distinct_domains, occurrence_count)\n"
+    "VALUES ($1, $2, jsonb_build_array($3::text), 1)\n"
+    "ON CONFLICT (ja4) DO UPDATE SET\n"
+    "    sample_ja3 = $2,\n"
+    "    occurrence_count =\n"
+    "        shadow_ai_clusters.occurrence_count + 1,\n"
+    "    distinct_domains = CASE WHEN\n"
+    "        shadow_ai_clusters.distinct_domains\n"
+    "        @> jsonb_build_array($3::text)\n"
+    "    THEN shadow_ai_clusters.distinct_domains\n"
+    "    ELSE shadow_ai_clusters.distinct_domains\n"
+    "        || jsonb_build_array($3::text) END\n"
+    "RETURNING jsonb_array_length(distinct_domains)"
+)
+rich_para(
+    "A cluster is promoted to `confidence = 'candidate'` once its distinct-domain count reaches "
+    "two — a single JA4 fingerprint seen talking to two or more unlisted domains is the working "
+    "definition of a shadow-AI candidate used throughout this project. This heuristic's real "
+    "precision limitation (it clusters by TLS client library, not by AI-specific behaviour, so "
+    "any two unlisted domains sharing an HTTP client would also cluster) is reported honestly in "
+    "Chapter 10 rather than left for a reviewer to discover."
+)
 subheading("Objective 3 — Outbound DLP / Exfiltration Gate")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The DLP gate runs in the page's own JavaScript context (`extension/src/content-main/"
+    "fetch-patch.ts`, injected at `document_start` on known-AI-domain pages) so it can patch "
+    "`window.fetch` and `XMLHttpRequest` before the page's own script ever gets a reference to "
+    "the originals — a background-script-only interception point would miss requests the page "
+    "issues before the background worker has a chance to inject anything. Manifest V3 forbids "
+    "this MAIN-world script from calling `chrome.*` APIs directly, so each intercepted request "
+    "body is relayed via `window.postMessage` to an ISOLATED-world content script, which bridges "
+    "it to the background worker and on to the Go daemon and Python classifier — the same "
+    "five-hop path as Chapter 7.2, with one difference: this path blocks. `patchedFetch` awaits "
+    "an approval decision before ever calling the real `fetch`, and throws an `AbortError` "
+    "instead of sending the request if the decision comes back not-approved."
+)
+code(
+    "window.fetch = async function patchedFetch(input, init) {\n"
+    "    const bodyText = await extractBodyText(init?.body ?? null);\n"
+    "    if (!bodyText.trim()) return originalFetch(input, init);\n"
+    "    const approved = await requestApproval(bodyText);\n"
+    "    if (!approved) {\n"
+    "        throw new DOMException(\n"
+    "            'Blocked: sensitive content not approved', 'AbortError');\n"
+    "    }\n"
+    "    return originalFetch(input, init);\n"
+    "};"
+)
+rich_para(
+    "Classification itself (`ai-engine/pii_detection/detector.py`) is deliberately simple for "
+    "this project's scope: named-entity regex for email, phone, SSN, and API-key/secret "
+    "patterns, plus a Luhn checksum on candidate credit-card-number matches specifically to cut "
+    "false positives — an arbitrary 13-to-19-digit run is not by itself card-shaped evidence, "
+    "but one that also passes Luhn is much more likely to be a real (or realistically "
+    "constructed) card number. A request is held for explicit user approval if any entity type "
+    "matches at all; there is no partial-trust or auto-approve tier."
+)
+rich_para(
+    "Body extraction handles the four real `fetch`/`XHR` payload shapes a browser can send — "
+    "plain string, `URLSearchParams`, `FormData` (including inspecting text-like file parts up "
+    "to a size cap, so a pasted-in `.txt` or `.csv` upload is still scanned, not only form "
+    "fields), and `Blob` — and caps inspected text at 200,000 bytes, since a large binary upload "
+    "is not text-scannable regardless. `ArrayBuffer`/`ReadableStream` bodies are explicitly out "
+    "of scope rather than silently mishandled. The approval wait fails open after five seconds on "
+    "the MAIN-world side specifically to keep normal page use responsive during local "
+    "development; the background worker's own longer approval-flow timeout is the fail-closed "
+    "boundary for a user who is reachable but simply has not responded yet."
+)
 subheading("Objective 4 — Multi-Endpoint Test Fleet and Dashboard")
-para(STAGE_PENDING, italic=True)
+rich_para(
+    "The dashboard (`dashboard/`, React + TypeScript) never queries raw event tables directly; "
+    "every panel is backed by a purpose-built aggregate endpoint in the Go daemon "
+    "(`agent/internal/store/dashboard.go`), modelled on the summary-first, drill-down-second "
+    "pattern used by real EDR/CASB consoles researched during design (CrowdStrike Falcon, "
+    "SentinelOne Singularity, Microsoft Purview) rather than a generic data table. The top-level "
+    "KPI row, for instance, is five scalar counts computed by a single query, not five separate "
+    "round trips or a client-side reduction over a full event dump:"
+)
+code(
+    "SELECT\n"
+    "    (SELECT count(*) FROM injection_alerts\n"
+    "        WHERE flagged = true),\n"
+    "    (SELECT count(*) FROM endpoints),\n"
+    "    (SELECT count(*) FROM shadow_ai_clusters\n"
+    "        WHERE confidence = 'candidate'),\n"
+    "    (SELECT count(*) FROM dlp_events\n"
+    "        WHERE verdict = 'flagged'),\n"
+    "    (SELECT count(*) FROM dlp_events\n"
+    "        WHERE verdict = 'flagged' AND approved IS NULL)"
+)
+rich_para(
+    "The multi-endpoint test fleet (`endpoints/`) is four Docker containers, each with its own "
+    "OS username and hostname, each running the real extension against a real headless Chrome "
+    "instance driven over the DevTools Protocol (`endpoints/driver.py`) — not four copies of a "
+    "mock client. `docker-compose.yml` uses `network_mode: host` so the fleet's native-messaging "
+    "shims can reach the host's Postgres and ai-engine over loopback without widening either "
+    "service's network exposure beyond `127.0.0.1`, and each container's `entrypoint.sh` "
+    "registers the native-messaging host at both the user-level and system-wide discovery paths "
+    "and sets a per-container `DAEMON_NM_URL` so each container's own `nmhost` process reaches "
+    "its own daemon rather than another container's. This fleet is what produces the real, "
+    "non-simulated confusion-matrix data reported in Chapter 9."
+)
 
 chapter_heading("Testing and Validation", 9)
 subheading("Build and Type Verification")
