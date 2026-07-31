@@ -246,6 +246,25 @@ def table(headers: list[str], rows: list[list[str]], caption_text: str, widths=N
     return label
 
 
+def add_rich_run(paragraph, text: str, bold=False, base_size=12):
+    """Splits text on `backtick` segments and renders those spans in a monospace font instead
+    of leaving literal backtick characters in the output — a genuine formatting bug found by
+    actually rendering the PDF and looking at it, not assumed correct just because the script
+    ran without error."""
+    parts = text.split("`")
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+        run = paragraph.add_run(part)
+        if i % 2 == 1:  # odd-indexed parts were inside backticks
+            run.font.name = "Consolas"
+            run.font.size = Pt(base_size - 1)
+        else:
+            run.font.name = TIMES
+            run.font.size = Pt(base_size)
+        run.bold = bold
+
+
 def code(text: str):
     p = doc.add_paragraph()
     p.paragraph_format.left_indent = Inches(0.3)
@@ -550,45 +569,401 @@ STAGE_PENDING = "[Content pending — see build plan for staging]"
 
 chapter_heading("Introduction", 1)
 subheading("The Shift From a Network Perimeter to an Agentic Browser Perimeter")
-para(STAGE_PENDING, italic=True)
+para(
+    "Most existing web security controls assume the browser is a passive rendering engine — a "
+    "human reads a page and decides what to do next. Through late 2025 and into 2026 that "
+    "assumption broke down: a new class of agentic AI browser (OpenAI's ChatGPT Atlas, "
+    "Perplexity's Comet, Anthropic's Claude in Chrome) reads pages and takes actions — clicking, "
+    "filling forms, sending data — on the user's behalf, with no human necessarily reading the "
+    "page at all."
+)
+para(
+    "Attackers adapted immediately. Content is now deliberately crafted to be read by an AI "
+    "agent rather than a human — instructions hidden in off-screen CSS, HTML comments, "
+    "zero-width Unicode, and page metadata, invisible on screen but present in the DOM an agent's "
+    "context window ingests. This technique is called indirect prompt injection, and it is not "
+    "theoretical: Google recorded a 32% rise in malicious indirect-injection content between "
+    "November 2025 and February 2026 [2]; independent red-team testing found ChatGPT Atlas "
+    "blocked only 5.8% and Perplexity Comet only 7% of malicious pages designed to hijack an "
+    "agent, against 47% and 53% for conventional phishing defences in ordinary Chrome and Edge "
+    "[6]; and OpenAI's own security leadership has stated that prompt injection may never be "
+    "fully solved for browser agents [7]."
+)
+para(
+    "This is structurally the same detection problem the author's prior capstone addressed for "
+    "network-based command-and-control (C2) traffic — an attacker hiding instructions inside a "
+    "channel the defender already trusts and cannot simply block — relocated to a new layer. "
+    "There, the trusted channel was DNS/HTTPS traffic and the hidden payload was a beacon to a "
+    "C2 server; here, the trusted channel is ordinary web content and the hidden payload is an "
+    "instruction targeting an AI agent's context window instead of a network socket."
+)
+para(
+    "The same agentic-AI adoption wave creates two adjacent, related problems inside the exact "
+    "same browser-to-AI channel. First, organisations frequently do not know which AI services "
+    "their own browsers are talking to — an increasingly recognised class of shadow IT called "
+    "“shadow AI”. Second, employees paste sensitive data into AI chat interfaces with no "
+    "governance at all: industry reporting places the browser as the point of roughly 80% of "
+    "generative-AI data leaks, with employees regularly pasting customer data, credentials, and "
+    "PII directly into prompts [11]. Commercial data-loss-prevention (DLP) products for exactly "
+    "this problem already exist (Strac, Nightfall, Microsoft Purview) [11], but none of the "
+    "literature or tooling surveyed in Chapter 2 combines platform discovery, outbound DLP, and "
+    "proactive client-side injection detection in a single evaluated system."
+)
 subheading("Scope and Organization of This Report")
-para(STAGE_PENDING, italic=True)
+para(
+    "This report documents the design, implementation, and evaluation of Browser AI Sentinel, a "
+    "standalone Chrome extension and local agent system addressing all three problems above. "
+    "Chapter 2 reviews the relevant literature and establishes the gap this project addresses. "
+    "Chapter 3 states the problem precisely, including what is explicitly out of scope. Chapter 4 "
+    "lists the study's objectives. Chapter 5 describes the phased build-and-verify methodology "
+    "actually used, the A/B/C evaluation methodology, and — in the interest of the same "
+    "evidence-over-narrative standard applied throughout this project — the real problems "
+    "encountered while building it and how each was found and fixed. Chapter 6 lists resource "
+    "requirements. Chapters 7 and 8 cover software design and implementation. Chapter 9 covers "
+    "testing and validation, and Chapter 10 presents the analysis and results, including the real "
+    "precision/recall/F1 numbers from a live, non-simulated 4-endpoint test fleet. Chapter 11 "
+    "closes with limitations and future scope."
+)
 
 chapter_heading("Literature Review", 2)
 subheading("Indirect Prompt Injection Against AI Browser Agents")
-para(STAGE_PENDING, italic=True)
+para(
+    "Indirect prompt injection occurs when a system composes untrusted external content (a web "
+    "page, a document, an email) with trusted instructions in a single context window and lets a "
+    "language model act on the result [1]. Brave's security research characterises this as a "
+    "fundamental, currently unsolved challenge for any AI system that ingests third-party content "
+    "[1]. Field observations from Zscaler ThreatLabz [5] and Palo Alto Networks' Unit 42 [4] "
+    "document real campaigns hiding instructions using off-screen CSS positioning, HTML comments, "
+    "and structured JSON-LD metadata that machines parse as trusted context but a human reader "
+    "never sees — the exact technique categories this project's DOM scanner targets. Mozilla has "
+    "separately warned of the same risk class specifically for AI coding agents [3], and Google's "
+    "own telemetry showed a 32% increase in malicious indirect-injection content in a four-month "
+    "window spanning late 2025 and early 2026 [2]."
+)
+para(
+    "Independent, adversarial testing of production AI browsers found ChatGPT Atlas and "
+    "Perplexity Comet blocking only 5.8% and 7% of malicious pages respectively, against 47–53% "
+    "for conventional browsers defending against phishing [6]. OpenAI's own head of preparedness "
+    "has stated publicly that prompt injection for browser agents “may never be fully solved” "
+    "[7], and OpenAI has since shipped iterative hardening for Atlas specifically in response to "
+    "red-team findings [8]. Taken together, this literature establishes indirect prompt injection "
+    "as a live, growing, and — by the vendors' own admission — structurally difficult problem, "
+    "not a hypothetical one."
+)
 subheading("Existing Detection and Red-Team Tooling")
-para(STAGE_PENDING, italic=True)
+para(
+    "Existing defensive and offensive tooling for prompt injection is concentrated at two other "
+    "layers, neither of which is the client-side DOM. Open-source detectors such as Rebuff [17] "
+    "and Pytector operate on the prompt text itself, using heuristics, a fine-tuned classifier, or "
+    "an LLM-as-judge to flag a string as adversarial before it reaches a model — useful for "
+    "direct injection into an application's own input field, but not applicable to instructions "
+    "hidden in a third-party web page's DOM. Offensive/red-team tools (Praetorian's Augustus [16], "
+    "a Burp Suite extension for LLM injection testing, and in-browser LLM-guided fuzzing research) "
+    "are built to discover injection vulnerabilities in a target system, not to protect an "
+    "end-user's own browsing session. Academic benchmarks — WAInjectBench [9], PromptShield, and "
+    "a 2026 study showing prompt-injection detection performance is strongly regime-dependent "
+    "(a detector tuned for one deployment context does not transfer cleanly to another) [10] — "
+    "evaluate detectors against curated text/image corpora, not against a live DOM as an AI agent "
+    "would actually encounter it. No surveyed system runs proactively, client-side, on the "
+    "rendered page itself, ahead of an agent reading it — the specific gap this project addresses."
+)
 subheading("Shadow AI Discovery and Enterprise DLP for AI Tools")
-para(STAGE_PENDING, italic=True)
+para(
+    "“Shadow AI” — employees using AI services an organisation has not sanctioned or even "
+    "identified — is now a recognised commercial security category. Vendors including Strac, "
+    "Nightfall, and Microsoft Purview ship browser-extension-based DLP that scans outbound "
+    "prompts and file uploads to known AI domains before they are sent, and report that the "
+    "browser is where the large majority of generative-AI data leakage actually occurs [11]. "
+    "These products are mature for the outbound-DLP half of the problem — this project's own DLP "
+    "module (Chapter 8) is explicitly positioned as governance, not a novel research contribution, "
+    "for that reason. Discovery of shadow AI itself, however, is uniformly domain-list-based in "
+    "the surveyed products: an AI service is “known” only if a vendor has already catalogued its "
+    "domain. None of the surveyed tools attempt network-layer fingerprint-based discovery of "
+    "*unlisted* AI services, which is where this project's shadow-AI clustering module (Chapters "
+    "8 and 10) differs — and, as Chapter 10 shows honestly, where a fingerprint-based approach's "
+    "real practical precision limits also become visible."
+)
 subheading("TLS Client Fingerprinting (JA3/JA4)")
-para(STAGE_PENDING, italic=True)
+para(
+    "JA3, developed at Salesforce [14], fingerprints a TLS client by hashing the cipher suites "
+    "and extensions offered in its ClientHello message. JA4, from FoxIO [15], is a newer, "
+    "explicitly GREASE-aware successor designed to strip out the randomised reserved values "
+    "modern browsers insert specifically to prevent fingerprint ossification. The author's prior "
+    "capstone used JA3/JA4 fingerprinting as one of eight behavioural indicators for detecting "
+    "C2 beaconing over encrypted traffic. This project repurposes the same underlying technique "
+    "for a different task — AI-platform identification and shadow-AI discovery instead of "
+    "anomaly-based C2 detection — and, in the course of doing so (Chapter 5.3), independently "
+    "rediscovered in a real, verified fleet-testing scenario exactly why JA4's GREASE-awareness "
+    "matters: JA3 alone proved unreliable as a stable client identifier for real Chrome traffic."
+)
 subheading("MITRE ATLAS and OWASP LLM Top 10")
-para(STAGE_PENDING, italic=True)
+para(
+    "MITRE ATLAS (Adversarial Threat Landscape for Artificial-Intelligence Systems) [12] is a "
+    "living, ATT&CK-modelled knowledge base of adversary tactics and techniques specifically "
+    "against AI-enabled systems, covering 16 tactics and over 80 techniques as of its most recent "
+    "revision. This project's injection-detection module maps cleanly to ATLAS technique "
+    "AML.T0051.001 (LLM Prompt Injection: Indirect, under the Initial Access tactic) — verified "
+    "against multiple independent sources during threat-model scoping. The outbound-DLP module's "
+    "mapping to ATLAS is, honestly, unresolved: secondary sources disagreed on what technique "
+    "AML.T0025 actually names, and the authoritative atlas.mitre.org site could not be fetched "
+    "directly to confirm (a JavaScript single-page application). OWASP's Gen AI Security Project "
+    "LLM Top 10, specifically LLM02:2025 “Sensitive Information Disclosure” [13], is used as the "
+    "confirmed, safer interim citation for that module instead of an unverified ATLAS ID — a "
+    "deliberate choice to avoid citing something not actually checked."
+)
 subheading("Consolidated Gap and This Project's Contribution")
-para(STAGE_PENDING, italic=True)
+para(
+    "Across the literature surveyed, three observations converge. First, indirect prompt "
+    "injection against AI browser agents is a real, growing, and — by vendors' own admission — "
+    "structurally unsolved problem. Second, existing defensive tooling operates either on raw "
+    "prompt text or as offensive red-team tooling, not as a proactive client-side DOM sentinel "
+    "running ahead of an agent reading a page. Third, shadow-AI discovery in commercial DLP "
+    "products is domain-list-based, with no surveyed system attempting network-fingerprint-based "
+    "discovery of unlisted AI services. This project's contribution is a single, standalone "
+    "system addressing all three gaps together — proactive DOM-level multi-indicator injection "
+    "detection, JA4-based shadow-AI discovery, and an outbound DLP gate — built and evaluated end "
+    "to end against real, non-simulated traffic through an actual multi-endpoint test fleet, with "
+    "every claim in this report backed by a stored number, a screenshot, or a citation rather than "
+    "prose alone."
+)
 
 chapter_heading("Problem Statement", 3)
-para(STAGE_PENDING, italic=True)
+para(
+    "AI browser agents ingest the content of arbitrary web pages into their working context and "
+    "act on it, but the current generation of such agents demonstrably fails to distinguish "
+    "content intended for a human reader from content specifically crafted to instruct the agent "
+    "itself. No control exists at the point where this matters most — the browser, before the "
+    "agent's own (often opaque, vendor-controlled) reasoning pipeline processes the page — to "
+    "flag content that reads like an instruction targeting an AI rather than a human. Separately, "
+    "the same browser-to-AI channel is used to send arbitrary, ungoverned data — including "
+    "personally identifiable information and secrets — to third-party AI services with no "
+    "visibility or approval step, and organisations frequently cannot enumerate which AI services "
+    "their own users' browsers are actually talking to."
+)
+para(
+    "This project's threat model is scoped precisely, and deliberately excludes adjacent problems "
+    "that would each need a different architecture to address correctly:"
+)
+bullet("In scope: indirect prompt injection — malicious instructions hidden in page content "
+       "(off-screen CSS, zero-width Unicode, HTML comments, hidden alt/ARIA text, JSON-LD "
+       "metadata) that a human browsing normally would not see but an AI agent reading the DOM "
+       "would ingest.")
+bullet("In scope: identification of which AI platform a browser is communicating with, including "
+       "platforms not on any predefined list (“shadow AI”), via network-layer TLS "
+       "fingerprinting rather than a static domain allowlist alone.")
+bullet("In scope: unauthorized transmission of sensitive data (PII, credentials, secrets) from "
+       "the browser to a known AI service, intercepted and gated before the request leaves the "
+       "machine.")
+bullet("Out of scope: injection via the user's own typed prompts (a different, already "
+       "well-covered problem — application-level prompt filtering — and not the novel "
+       "contribution here).")
+bullet("Out of scope: post-hoc analysis of an AI agent's response after a successful "
+       "compromise — this would require access to the agent's internal state, which is not "
+       "available to a client-side browser extension.")
+bullet("Out of scope: blocking an AI agent that reads a page through its own privileged channel "
+       "(e.g. the Chrome DevTools Protocol or an accessibility-tree API) rather than the visible "
+       "DOM — this system is explicitly an intrusion detection system (IDS), not a prevention "
+       "system (IPS), for that reason, exactly mirroring the posture the author's prior capstone "
+       "took with Suricata/Zeek at the network layer.")
 
 chapter_heading("Objectives of the Study", 4)
-para(STAGE_PENDING, italic=True)
+para("The study has four objectives, each mapped directly to an implemented module (Chapter 8) "
+     "and a verification step (Chapter 9):")
+bullet("Objective 1: Design and implement a client-side, multi-indicator DOM scanner that "
+       "detects indirect prompt injection with materially better precision and recall than any "
+       "single indicator used in isolation, and evaluate this claim against a real labelled "
+       "dataset rather than assert it.")
+bullet("Objective 2: Design and implement network-layer AI-platform identification via real "
+       "TLS SNI/JA3/JA4 fingerprinting, including a heuristic for discovering AI services not on "
+       "any predefined list (“shadow AI”), and evaluate the heuristic's real behaviour "
+       "against live traffic rather than only synthetic test cases.")
+bullet("Objective 3: Design and implement an outbound data-loss-prevention gate that intercepts "
+       "and classifies content bound for known AI services before it is sent, holding "
+       "PII/secret-bearing requests for explicit user approval.")
+bullet("Objective 4: Build a small, realistic multi-endpoint test environment (distinct "
+       "simulated users/hosts) that exercises all three modules through the actual running "
+       "system — not a simulation — and produce a governance-style dashboard summarising the "
+       "results, modelled on real EDR/CASB product patterns (CrowdStrike Falcon, SentinelOne "
+       "Singularity, Microsoft Purview) researched during design.")
 
 chapter_heading("Project Methodology", 5)
 subheading("Phased Build-and-Verify Methodology")
-para(STAGE_PENDING, italic=True)
+para(
+    "The system was built in four sequential phases, each fully verified against real running "
+    "software before the next began — the same build-verify-before-proceeding discipline used in "
+    "the author's prior capstone, applied here to a very different architecture."
+)
+bullet("Phase 1 — single-endpoint MVP: the Chrome extension, Go agent (daemon + native-messaging "
+       "shim), Python scoring service, and Postgres store, wired together and verified end to "
+       "end in a real (not simulated) Chrome instance via the Chrome DevTools Protocol, with the "
+       "AI-platform module still a static domain-list stub.")
+bullet("Phase 2 — real network sensor: a standalone Zeek/Suricata deployment (fresh install and "
+       "configuration, no code or infrastructure shared with the author's prior capstone) "
+       "replacing the Phase 1 stub with real SNI/JA3/JA4 extraction and a first-cut shadow-AI "
+       "clustering heuristic.")
+bullet("Phase 3 — labelled dataset and multi-endpoint test fleet: a 70-page synthetic, labelled "
+       "dataset for the injection-detection module, and four Docker containers — each its own "
+       "OS user and hostname — running the real extension, agent, and scoring pipeline against "
+       "real (not mocked) traffic, producing the evaluation data in Chapter 10.")
+bullet("Phase 4 — dashboard: a governance-style web dashboard over the accumulated real data, "
+       "backed by new server-side aggregate API endpoints rather than raw data dumped to the "
+       "client.")
 subheading("Evaluation (A/B/C Comparison) Methodology")
-para(STAGE_PENDING, italic=True)
+para(
+    "The injection-detection module is evaluated using the same three-configuration comparison "
+    "methodology as the author's prior capstone, applied to a different indicator set: "
+    "Configuration A is a keyword-only baseline (flags a page if any visible text matches an "
+    "imperative-to-AI phrase pattern); Configuration B is a visibility-only baseline (flags a "
+    "page if any off-screen or zero-width-Unicode indicator is present, regardless of "
+    "content); Configuration C is the full multi-indicator detector, which combines all six "
+    "indicators using a noisy-OR combination (Chapter 8.1) rather than a simple threshold sum. "
+    "All three configurations are computed from the same underlying indicator counts in a single "
+    "request to the scoring service, so A, B, and C are never subject to timing or environment "
+    "differences relative to one another — only to the real page content itself."
+)
+para(
+    "Ground truth for the evaluation is a synthetic, labelled dataset (70 pages: 30 benign, 10 "
+    "“hard-negative” pages carrying exactly one weak indicator, 30 injected pages carrying "
+    "two to four indicators), generated deterministically so the same dataset can be regenerated "
+    "and re-scored. Precision, recall, and F1 are computed per configuration from real "
+    "confusion-matrix counts recorded by the live system during a real 4-endpoint fleet run "
+    "(Chapter 9), not simulated or hand-computed."
+)
 subheading("Problems Encountered and How They Were Resolved")
-para(STAGE_PENDING, italic=True)
+para(
+    "In keeping with the same standard applied throughout this project — real evidence, not a "
+    "polished-sounding narrative — this section records every material defect found while "
+    "building the system, its root cause, and its fix, in the order each was discovered. Several "
+    "were only found by checking real output against expectation rather than trusting a "
+    "clean-looking log or a successful build."
+)
+_PROBLEMS = [
+    ("Chrome install path", "`--load-extension` (command-line flag) does not reliably install an "
+     "unpacked Manifest V3 extension on the Chrome version used in this project — a service "
+     "worker spins up, but content scripts never inject. Root cause: this flag is effectively "
+     "degraded on recent Chrome; the correct path is the `Extensions.loadUnpacked` DevTools "
+     "Protocol command (the same one `chrome://extensions`'s “Load unpacked” button uses "
+     "internally), which also correctly honours the manifest's pinned signing key for a "
+     "deterministic extension ID. Fixed by switching every automated install path to that "
+     "command."),
+    ("Native messaging host discovery", "A Chrome profile launched with a custom "
+     "`--user-data-dir` does not discover a native-messaging-host registration placed only at "
+     "the user-level path; only the system-wide path was reliably found. Fixed by registering "
+     "the host at both locations."),
+    ("Zeek silently drops all TLS", "The virtio network interface on the deployment VM has "
+     "checksum offloading enabled, which makes Zeek see “invalid” TCP checksums on "
+     "outbound packets and discard them by default — confirmed by comparing `conn.log` "
+     "(populated) against `ssl.log` (empty) on the same capture. Fixed with Zeek's `-C` "
+     "(ignore-checksums) flag."),
+    ("Shadow-AI confidence default", "The `shadow_ai_clusters.confidence` column's schema "
+     "default was mistakenly `'candidate'` instead of `'observed'`, so every single-domain "
+     "sighting looked like a multi-domain cluster immediately — caught by testing against "
+     "real ambient background traffic on the deployment machine, not only the constructed happy "
+     "path. Fixed in the schema and via a one-time correction on the live database."),
+    ("Suricata multi-interface capture", "Passing `-i ens18` on the command line silently "
+     "overrides a YAML config's multi-interface `af-packet` list down to a single interface. "
+     "Fixed by using `--af-packet` with no value, which tells Suricata to read the interface "
+     "list from the config file."),
+    ("Same-host traffic invisible to the sensor", "The mock “unknown AI” test "
+     "endpoints run on the same host as the sensor; same-host traffic to a local address never "
+     "transits the physical network interface, so it was invisible to a sensor watching only "
+     "`ens18`. Fixed by adding a second Zeek instance and a second Suricata interface, both "
+     "watching loopback."),
+    ("Container native-messaging gap repeated", "The same native-messaging registration gap "
+     "found earlier on the host was independently reintroduced inside the Phase 3 test-fleet "
+     "containers, because the fix was not carried over into the container entrypoint script — "
+     "causing the first full fleet run to silently record zero rows despite every page reporting "
+     "a successful visit. Fixed the same way, plus each container's native-messaging shim needed "
+     "to be told which port its own daemon was listening on, since containers share ports "
+     "1-to-1 with the host under the chosen networking mode."),
+    ("Extension silently skipped benign pages", "The DOM scanner only messaged the local agent "
+     "when it found at least one indicator, so the dataset's 30 pure-benign pages were never "
+     "scored or logged at all — leaving no true-negative data for the evaluation even after "
+     "the storage layer was changed to log every score. Fixed by removing the early return so "
+     "every scan reports, clean or not."),
+    ("Hard-negative dataset miscalibration", "The zero-width-Unicode hard-negative test pages "
+     "were generated with four zero-width characters, which the scorer's own weighting treats as "
+     "a maximally strong single indicator — not the intended weak, single-occurrence test "
+     "case — causing that indicator alone to saturate the score. Fixed by parameterising the "
+     "generator so hard-negative pages use exactly one occurrence."),
+    ("JA3 instability under Chrome's GREASE", "Shadow-AI clustering, keyed on the pair (JA3, "
+     "JA4), never accumulated multi-domain evidence for real browser traffic. Root cause: "
+     "Chrome's GREASE mechanism randomises reserved cipher/extension values in every ClientHello, "
+     "which JA3's hashing treats as signal — confirmed empirically, with ten of twelve real "
+     "Chrome connections to the same two test domains each producing a distinct JA3, while JA4 "
+     "(designed to strip GREASE before hashing) stayed identical across all of them. Earlier "
+     "testing had only appeared to work because it used `curl`, which does not implement GREASE. "
+     "Fixed by re-keying the clustering table on JA4 alone."),
+    ("Postgres ORDER BY on combined aliases", "An `ORDER BY` expression combining two "
+     "`SELECT`-list aliases from correlated subqueries failed with “column does not "
+     "exist,” even though each alias resolves individually. Fixed by wrapping the query in a "
+     "subquery and ordering the outer query instead."),
+    ("Host-level, not per-container, sensor attribution", "Network-sensor-derived events are "
+     "attributed to whichever endpoint's agent is tailing the sensor logs — only the host, "
+     "since the test-fleet containers do not run their own sensor — so a shadow-AI event "
+     "generated by one container's browsing is recorded against the host, not that container. "
+     "This is a genuine architectural limitation of packet-capture-based attribution, not a bug "
+     "to be silently fixed; it is stated plainly in Chapter 10 and Chapter 11 rather than left "
+     "for a reviewer to discover."),
+]
+for title, desc in _PROBLEMS:
+    p = doc.add_paragraph()
+    r = p.add_run(f"{title}. ")
+    r.font.name, r.font.size, r.bold = TIMES, Pt(12), True
+    add_rich_run(p, desc)
+    p.paragraph_format.space_after = Pt(8)
 
 chapter_heading("Resource Requirement Specification", 6)
 subheading("Hardware Requirements")
-para(STAGE_PENDING, italic=True)
+para(
+    "The complete system — extension, agent, scoring service, database, network sensor, and "
+    "4-container test fleet — was built and evaluated on a single Ubuntu virtual machine: 16 "
+    "vCPUs, 15 GiB RAM, and roughly 1 TB of disk (908 GB free at time of evaluation). No GPU or "
+    "specialised hardware is required by any component. This single-host footprint is "
+    "deliberate: the system is scoped and evaluated at the scale of a university department or "
+    "small company, not a hyperscale enterprise deployment."
+)
+table(
+    ["Component", "Minimum", "Used in this project"],
+    [
+        ["CPU", "4 vCPUs", "16 vCPUs"],
+        ["RAM", "8 GB", "15 GiB"],
+        ["Disk", "20 GB free", "~1 TB (908 GB free)"],
+        ["Network", "1 real NIC (for sensor capture)", "ens18 (virtio) + loopback"],
+    ],
+    "Hardware requirements",
+)
 subheading("Software Requirements")
-para(STAGE_PENDING, italic=True)
+para("All software used is open-source or freely available, and every version below is the "
+     "exact version actually used, not a general recommendation.")
+table(
+    ["Layer", "Software", "Version"],
+    [
+        ["OS", "Ubuntu Server", "24.04.4 LTS"],
+        ["Extension", "TypeScript / esbuild", "5.7.2 / 0.24.0"],
+        ["Extension runtime", "Google Chrome (Manifest V3)", "150.0.7871.46"],
+        ["Local agent", "Go", "1.22.2"],
+        ["Scoring service", "Python / FastAPI / uvicorn", "3.12.3 / 0.115.6 / 0.34.0"],
+        ["Storage", "PostgreSQL", "16.14"],
+        ["Network sensor", "Zeek (+ JA3/JA4 zkg packages)", "8.2.1"],
+        ["Network sensor", "Suricata", "8.0.5"],
+        ["Test fleet", "Docker Engine", "29.1.3"],
+        ["Dashboard", "React / Vite / TypeScript", "18.3.1 / 6.0.5 / 5.7.2"],
+    ],
+    "Software requirements",
+)
 subheading("Data Requirements")
-para(STAGE_PENDING, italic=True)
+para(
+    "No third-party or personally identifying real-world data was used anywhere in this project. "
+    "The injection-detection evaluation uses a fully synthetic, deterministically generated "
+    "70-page HTML dataset (Chapter 9). The DLP module is evaluated with synthetic PII strings "
+    "constructed for testing (a fabricated email address and a Luhn-valid but non-issued card "
+    "number), sent only to a nonexistent path on a real AI domain so no data is actually "
+    "transmitted anywhere. The network-sensor and shadow-AI modules were evaluated against real "
+    "live traffic on the deployment machine itself — the author's own machine, single-user, "
+    "self-consented — which is explicitly a different, lighter-weight ethical posture than "
+    "monitoring a shared or third-party network, and is stated as such."
+)
 
 chapter_heading("Software Design", 7)
 subheading("System Architecture")
